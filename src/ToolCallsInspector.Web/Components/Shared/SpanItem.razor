@@ -1,0 +1,157 @@
+@inject InsightsService Insights
+@{
+    var s = Node.Span;
+}
+<div class="span-row @CssClass">
+    <span class="icon">
+        @if (HasDetail)
+        {
+            <button class="btn-link" @onclick="ToggleAsync" title="Show details">@(_expanded ? "▾" : "▸")</button>
+        }
+        else
+        {
+            @Icon
+        }
+    </span>
+    <span class="title">
+        @switch (Node.Category)
+        {
+            case SpanCategory.LlmCall:
+                <span>🤖 </span><a class="name" href="@Fmt.SpanUrl(s.Id)">LLM call @(Node.CallIndex is { } idx ? $"#{idx}" : "")</a>
+                <span class="muted"> @s.Model</span>
+                @if (!string.IsNullOrEmpty(s.DebugLabel) && s.DebugLabel != s.AgentName)
+                {
+                    <span class="badge" style="margin-left:.35rem">@s.DebugLabel</span>
+                }
+                @if (s.StatusCode == 2 || s.ErrorType is not null)
+                {
+                    <span class="badge err" style="margin-left:.35rem">@(s.ErrorType ?? "error")</span>
+                }
+                break;
+            case SpanCategory.Tool:
+                <span>🔧 </span><a class="name mono" href="@Fmt.SpanUrl(s.Id)">@(s.ToolName ?? s.Name)</a>
+                @if (s.StatusCode == 2 || s.ErrorType is not null)
+                {
+                    <span class="badge err" style="margin-left:.35rem">failed</span>
+                }
+                break;
+            case SpanCategory.Agent:
+                <span>🧠 </span><a class="name" href="@Fmt.SpanUrl(s.Id)">@(Node.IsPlaceholder ? "Agent (in progress)" : $"Agent: {s.AgentName ?? s.Name}")</a>
+                @if (Node.Parent?.Category == SpanCategory.Tool)
+                {
+                    <span class="badge accent" style="margin-left:.35rem">sub-agent</span>
+                }
+                break;
+            case SpanCategory.Hook:
+                <span>🪝 </span><span class="name">Hook: @(s.HookType ?? s.Name)</span>
+                @if (!string.IsNullOrEmpty(s.HookDecision))
+                {
+                    <span class="badge @(s.HookDecision is "deny" or "block" ? "err" : "ok")" style="margin-left:.35rem">@s.HookDecision</span>
+                }
+                break;
+            default:
+                <span class="name">@s.Name</span>
+                break;
+        }
+    </span>
+    <span>
+        @if (Node.Category == SpanCategory.LlmCall)
+        {
+            <BreakdownBar Slices="CallSlices.For(Node)" Small="true" />
+        }
+        else if (Node.Category == SpanCategory.Tool && Node.IntroducedTokens is { } introduced)
+        {
+            <span class="muted" style="font-size:.78rem" title="Tokens this tool result added to the model's context">
+                +@Fmt.Tokens(introduced) tokens to context@(Node.IntroducedIsEstimate ? " (est.)" : "")
+            </span>
+        }
+    </span>
+    <span class="stats">
+        @if (Node.Category == SpanCategory.LlmCall)
+        {
+            <span title="Input tokens (cached)">in @Fmt.Tokens(s.InputTokens)@(s.CacheReadTokens > 0 ? $" ({Fmt.Tokens(s.CacheReadTokens)} cached)" : "")</span>
+            <span> · out @Fmt.Tokens(s.OutputTokens)</span>
+            <span> · </span>
+        }
+        @if (!Node.IsPlaceholder)
+        {
+            @Fmt.Duration(s.DurationMs)
+        }
+    </span>
+</div>
+
+@if (_expanded)
+{
+    <div class="span-detail">
+        @if (_content is null)
+        {
+            <span class="muted">Loading…</span>
+        }
+        else if (Node.Category == SpanCategory.Tool)
+        {
+            <div class="muted" style="font-size:.75rem">Arguments</div>
+            <pre class="code">@Preview(JsonPretty.Format(_content.ToolArguments))</pre>
+            <div class="muted" style="font-size:.75rem">Result</div>
+            <pre class="code">@Preview(_content.ToolResult)</pre>
+        }
+        else if (Node.Category == SpanCategory.LlmCall)
+        {
+            var output = GenAiMessageParser.TryParse(_content.OutputMessages);
+            var text = output is null ? _content.OutputMessages : string.Join("\n\n", output.Select(m => m.Text).Where(t => t.Length > 0));
+            <div class="muted" style="font-size:.75rem">Response</div>
+            <pre class="code">@Preview(string.IsNullOrWhiteSpace(text) ? "(no text – tool calls only)" : text)</pre>
+        }
+        <a href="@Fmt.SpanUrl(s.Id)">Open full details →</a>
+    </div>
+}
+
+@{
+    var children = Node.Category switch
+    {
+        SpanCategory.LlmCall => (IReadOnlyList<SpanNode>)Node.RequestedTools.OrderBy(t => t.Span.StartTime).ToList(),
+        SpanCategory.Agent => Node.TimelineItems(),
+        _ => Node.Children.OrderBy(c => c.Span.StartTime).ToList(),
+    };
+}
+@if (children.Count > 0)
+{
+    <div class="span-children">
+        @foreach (var child in children)
+        {
+            <SpanItem @key="child.Span.Id" Node="child" />
+        }
+    </div>
+}
+
+@code {
+    [Parameter, EditorRequired] public SpanNode Node { get; set; } = default!;
+
+    private bool _expanded;
+    private SpanContent? _content;
+
+    private bool HasDetail => Node.Span.HasContent && Node.Category is SpanCategory.Tool or SpanCategory.LlmCall;
+
+    private string CssClass => Node.Category switch
+    {
+        SpanCategory.LlmCall => "llm",
+        SpanCategory.Tool => "tool",
+        SpanCategory.Agent => "agent",
+        SpanCategory.Hook => "hook",
+        _ => string.Empty,
+    };
+
+    private string Icon => "•";
+
+    private async Task ToggleAsync()
+    {
+        _expanded = !_expanded;
+        if (_expanded && _content is null)
+        {
+            var content = await Insights.GetContentAsync([Node.Span.Id]);
+            _content = content.GetValueOrDefault(Node.Span.Id) ?? new SpanContent { Id = Node.Span.Id };
+        }
+    }
+
+    private static string Preview(string? text) =>
+        string.IsNullOrEmpty(text) ? "(not captured)" : text.Length > 4000 ? text[..4000] + $"\n… ({text.Length - 4000:N0} more chars)" : text;
+}

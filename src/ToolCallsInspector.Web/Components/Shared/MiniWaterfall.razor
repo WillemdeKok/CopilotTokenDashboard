@@ -1,0 +1,14 @@
+@* Compact one-line timeline of a trace: LLM calls and tool calls positioned in time. *@
+<div class="mini-waterfall" title="LLM calls (indigo) and tool calls (orange) over the trace duration">
+    @foreach (var node in Trace.LlmCalls.Concat(Trace.ToolCalls))
+    {
+        var (left, width) = Waterfall.Position(Trace, node.Span.StartTime, node.Span.DurationMs);
+        <div class="seg @Waterfall.CssClass(node)" style="left:@Css(left)%;width:@Css(width)%"></div>
+    }
+</div>
+
+@code {
+    [Parameter, EditorRequired] public TraceAnalysis Trace { get; set; } = default!;
+
+    private static string Css(double value) => value.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture);
+}

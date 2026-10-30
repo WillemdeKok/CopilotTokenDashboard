@@ -1,0 +1,74 @@
+@page "/tools"
+@inherits LiveComponentBase
+@inject InsightsService Insights
+
+<PageTitle>Tools · Tool Calls Inspector</PageTitle>
+
+<div class="page-header">
+    <div>
+        <h1>Tools</h1>
+        <div class="subtitle">How much context each tool's results add — and how often that context gets re-sent.</div>
+    </div>
+</div>
+
+@if (Loading)
+{
+    <div class="muted">Loading…</div>
+}
+else if (_totals is null || _totals.ByTool.Count == 0)
+{
+    <div class="panel empty"><h2>No tool calls yet</h2></div>
+}
+else
+{
+    var t = _totals;
+    var maxConsumed = Math.Max(1, t.ByTool.Values.Max(x => x.ConsumedInputTokens));
+    <div class="callout">
+        <strong>Introduced</strong> = tokens a tool's results added to the context the first time they were sent.
+        <strong>Consumed</strong> = input tokens spent on those results across <em>every</em> later LLM call (results stay in the conversation and are re-sent).
+        A small result introduced early in a long agent loop can cost many times its size.
+    </div>
+    <div class="panel">
+        <table class="data">
+            <thead>
+                <tr>
+                    <th>Tool</th>
+                    <th class="num">Calls</th>
+                    <th class="num">Failures</th>
+                    <th class="num">Avg duration</th>
+                    <th class="num">Introduced</th>
+                    <th class="num">Avg / call</th>
+                    <th class="num">Consumed</th>
+                    <th class="num">Re-send factor</th>
+                    <th class="num">% of all input</th>
+                    <th style="width:180px"></th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var tool in t.ByTool.Values.OrderByDescending(x => x.ConsumedInputTokens).ThenByDescending(x => x.Calls))
+                {
+                    <tr>
+                        <td class="mono">@tool.ToolName</td>
+                        <td class="num">@tool.Calls</td>
+                        <td class="num">@(tool.Failures > 0 ? tool.Failures.ToString() : "–")</td>
+                        <td class="num">@Fmt.Duration(tool.Calls > 0 ? tool.DurationMs / tool.Calls : 0)</td>
+                        <td class="num">@Fmt.Tokens(tool.IntroducedTokens)</td>
+                        <td class="num">@Fmt.Tokens(tool.Calls > 0 ? tool.IntroducedTokens / tool.Calls : 0)</td>
+                        <td class="num"><strong>@Fmt.Tokens(tool.ConsumedInputTokens)</strong></td>
+                        <td class="num">@(tool.IntroducedTokens > 0 ? $"{tool.ConsumedInputTokens / tool.IntroducedTokens:0.0}×" : "–")</td>
+                        <td class="num">@Fmt.Pct(t.Input > 0 ? tool.ConsumedInputTokens / t.Input * 100 : 0)</td>
+                        <td>
+                            <div class="stacked-bar small"><div style="width:@((tool.ConsumedInputTokens / maxConsumed * 100).ToString("0.##", System.Globalization.CultureInfo.InvariantCulture))%;background:@Palette.For(nameof(TokenCategory.ToolResults))"></div></div>
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+}
+
+@code {
+    private TokenTotals? _totals;
+
+    protected override async Task LoadAsync() => _totals = (await Insights.GetGlobalAsync()).Totals;
+}

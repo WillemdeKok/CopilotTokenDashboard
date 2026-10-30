@@ -1,0 +1,296 @@
+@page "/traces"
+@inherits LiveComponentBase
+@inject InsightsService Insights
+@inject IClientCatalog Clients
+@inject NavigationManager Nav
+
+<PageTitle>Traces · Tool Calls Inspector</PageTitle>
+
+<div class="page-header">
+    <div>
+        <h1>Traces</h1>
+        <div class="subtitle">All LLM traffic, newest first. Open a trace for its waterfall, or expand an LLM call to see the request and response.</div>
+    </div>
+    <div style="display:flex;gap:.6rem;align-items:center;flex-wrap:wrap">
+        <div class="segmented">
+            <button class="@(CallsView ? "" : "active")" @onclick='() => SetView(null)'>Traces</button>
+            <button class="@(CallsView ? "active" : "")" @onclick='() => SetView("calls")'>LLM calls</button>
+        </div>
+        <label class="muted" style="font-size:.8rem;display:inline-flex;gap:.3rem;align-items:center">
+            <input type="checkbox" @bind="_showBackground" /> background requests
+        </label>
+        @if (!CallsView)
+        {
+            <label class="muted" style="font-size:.8rem;display:inline-flex;gap:.3rem;align-items:center">
+                <input type="checkbox" @bind="_grouped" /> group by conversation
+            </label>
+        }
+        <input class="btn" style="min-width:240px;cursor:text" placeholder="Filter by prompt, model, tool…" @bind="_filter" @bind:event="oninput" />
+    </div>
+</div>
+
+@if (Loading)
+{
+    <div class="muted">Loading…</div>
+}
+else if (_traces.Count == 0)
+{
+    <div class="panel empty">
+        <h2>No traces yet</h2>
+        <p>Traces appear here as soon as Copilot exports telemetry. <a href="setup">Set up a client</a>.</p>
+    </div>
+}
+else if (!CallsView)
+{
+    var rows = FilteredTraces().ToList();
+    var groups = _grouped ? Group(rows).ToList() : null;
+    <div class="panel">
+        <table class="data">
+            <thead>
+                <tr>
+                    <th class="num">Started</th>
+                    <th>Trace</th>
+                    <th>Client</th>
+                    <th>Models</th>
+                    <th class="num">LLM calls</th>
+                    <th class="num">Tool calls</th>
+                    <th class="num">Duration</th>
+                    <th class="num">Tokens</th>
+                    <th style="width:140px">Timeline</th>
+                </tr>
+            </thead>
+            <tbody>
+                @if (groups is not null)
+                {
+                    @foreach (var g in groups.Take(_limit))
+                    {
+                        var open = IsGroupOpen(g);
+                        var newest = g.Traces[0];
+                        <tr class="clickable group-row @(open ? "open" : "")" @onclick="() => ToggleGroup(g)">
+                            <td class="num" title="@Fmt.DateTime(newest.Start)">@Fmt.Time(newest.Start)<div class="muted" style="font-size:.72rem">@Fmt.Relative(newest.Start)</div></td>
+                            <td>
+                                <span class="caret">@(open ? "▾" : "▸")</span>
+                                @if (g.Traces.Any(t => t.InProgress)) { <span class="badge warn" style="margin-right:.3rem">in progress</span> }
+                                <a href="@Fmt.SessionUrl(g.SessionKey)" @onclick:stopPropagation="true"><strong>@Fmt.OneLine(g.Title, 90)</strong></a>
+                                <div class="muted" style="font-size:.72rem;margin-left:1.1rem">
+                                    💬 @g.Traces.Count turn@(g.Traces.Count == 1 ? "" : "s") · started @Fmt.Relative(g.Traces[^1].Start)
+                                </div>
+                            </td>
+                            <td class="nowrap">@Clients.GetDisplayName(g.ClientId)</td>
+                            <td>
+                                @foreach (var m in g.Traces.SelectMany(t => t.LlmCalls).Select(c => c.Span.Model).Distinct())
+                                {
+                                    <span class="badge" style="margin:0 .2rem .2rem 0">@m</span>
+                                }
+                            </td>
+                            <td class="num">@g.Traces.Sum(t => t.Totals.LlmCalls)</td>
+                            <td class="num">@g.Traces.Sum(t => t.Totals.ToolCalls)</td>
+                            <td class="num" title="Sum of turn durations (excludes idle time between turns)">@Fmt.Duration(g.Traces.Sum(t => (t.End - t.Start).TotalMilliseconds))</td>
+                            <td class="num"><strong>@Fmt.Tokens(g.Traces.Sum(t => t.Totals.Total))</strong></td>
+                            <td></td>
+                        </tr>
+                        @if (open)
+                        {
+                            @foreach (var t in g.Traces)
+                            {
+                                @TraceRow((t, true))
+                            }
+                        }
+                    }
+                }
+                else
+                {
+                    @foreach (var t in rows.Take(_limit))
+                    {
+                        @TraceRow((t, false))
+                    }
+                }
+            </tbody>
+        </table>
+        @(groups is null ? ShowMore(rows.Count) : ShowMore(groups.Count, "conversation"))
+    </div>
+}
+else
+{
+    var rows = FilteredCalls().ToList();
+    <div class="panel">
+        <table class="data calls">
+            <thead>
+                <tr>
+                    <th style="width:22px"></th>
+                    <th class="num">Time</th>
+                    <th>Model</th>
+                    <th>Trace</th>
+                    <th>Requested tools</th>
+                    <th class="num">Input</th>
+                    <th class="num">Cached</th>
+                    <th class="num">Output</th>
+                    <th class="num">Latency</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var (t, c) in rows.Take(_limit))
+                {
+                    var s = c.Span;
+                    var open = _open.Contains(s.Id);
+                    <tr class="clickable @(open ? "selected" : "")" @onclick="() => Toggle(s.Id)">
+                        <td>@(open ? "▾" : "▸")</td>
+                        <td class="num" title="@Fmt.DateTime(s.StartTime)">@Fmt.Time(s.StartTime)</td>
+                        <td class="nowrap">
+                            <span class="mono">@s.Model</span>
+                            @if (!string.IsNullOrEmpty(s.DebugLabel) && s.DebugLabel != s.AgentName)
+                            {
+                                <span class="badge" style="margin-left:.3rem">@s.DebugLabel</span>
+                            }
+                            @if (s.StatusCode == 2 || s.ErrorType is not null)
+                            {
+                                <span class="badge err" style="margin-left:.3rem">@(s.ErrorType ?? "error")</span>
+                            }
+                        </td>
+                        <td>
+                            <a href="@Fmt.TraceUrl(t.TraceId, s.Id)" @onclick:stopPropagation="true">@Fmt.OneLine(t.DisplayTitle, 70)</a>
+                            @if (c.CallIndex is { } idx) { <span class="muted"> · call #@idx</span> }
+                        </td>
+                        <td>
+                            @if (c.RequestedTools.Count == 0)
+                            {
+                                <span class="muted" style="font-size:.78rem">@(s.FinishReasons ?? "–")</span>
+                            }
+                            @foreach (var tool in c.RequestedTools.OrderBy(x => x.Span.StartTime))
+                            {
+                                <span class="badge" style="margin:0 .2rem .2rem 0">@(tool.Span.ToolName ?? tool.Span.Name)</span>
+                            }
+                        </td>
+                        <td class="num">@Fmt.Tokens(s.InputTokens)</td>
+                        <td class="num muted">@Fmt.Tokens(s.CacheReadTokens)</td>
+                        <td class="num">@Fmt.Tokens(s.OutputTokens)</td>
+                        <td class="num">@Fmt.Duration(s.DurationMs)</td>
+                    </tr>
+                    @if (open)
+                    {
+                        <tr class="expanded">
+                            <td colspan="9"><SpanPayload @key="s.Id" Node="c" /></td>
+                        </tr>
+                    }
+                }
+            </tbody>
+        </table>
+        @ShowMore(rows.Count)
+    </div>
+}
+
+@code {
+    [SupplyParameterFromQuery(Name = "view")] public string? View { get; set; }
+
+    private const int PageSize = 100;
+    private IReadOnlyList<TraceAnalysis> _traces = [];
+    private readonly HashSet<string> _open = [];
+    private string _filter = string.Empty;
+    private bool _showBackground = true;
+    private bool _grouped = true;
+    private readonly Dictionary<string, bool> _groupOpen = [];
+    private int _limit = PageSize;
+
+    private sealed record TraceGroup(string SessionKey, string ClientId, string Title, IReadOnlyList<TraceAnalysis> Traces);
+
+    private IReadOnlyDictionary<string, SessionAnalysis> _sessions = new Dictionary<string, SessionAnalysis>();
+
+    private bool CallsView => string.Equals(View, "calls", StringComparison.OrdinalIgnoreCase);
+
+    protected override async Task LoadAsync()
+    {
+        var sessions = await Insights.GetSessionsAsync();
+        _sessions = sessions.ToDictionary(s => s.SessionKey);
+        _traces = sessions.SelectMany(s => s.Traces).OrderByDescending(t => t.Start).ToList();
+    }
+
+    // Rows arrive newest-first, so each group's traces stay newest-first and groups sort by latest activity.
+    private IEnumerable<TraceGroup> Group(IEnumerable<TraceAnalysis> rows) =>
+        rows.GroupBy(t => t.SessionKey).Select(g => new TraceGroup(
+            g.Key,
+            g.First().ClientId,
+            _sessions.TryGetValue(g.Key, out var s) ? s.Title : g.Last().DisplayTitle,
+            g.ToList()));
+
+    private bool IsGroupOpen(TraceGroup g) =>
+        _groupOpen.TryGetValue(g.SessionKey, out var open)
+            ? open
+            : !string.IsNullOrWhiteSpace(_filter) || g.Traces[0].Start == _traces[0].Start;
+
+    private void ToggleGroup(TraceGroup g) => _groupOpen[g.SessionKey] = !IsGroupOpen(g);
+
+    private RenderFragment TraceRow((TraceAnalysis Trace, bool Nested) item) => __builder =>
+    {
+        var t = item.Trace;
+        <tr class="clickable @(item.Nested ? "child-row" : "")" @onclick="() => Nav.NavigateTo(Fmt.TraceUrl(t.TraceId))">
+            <td class="num" title="@Fmt.DateTime(t.Start)">@Fmt.Time(t.Start)<div class="muted" style="font-size:.72rem">@Fmt.Relative(t.Start)</div></td>
+            <td>
+                @if (t.IsBackground) { <span class="badge" style="margin-right:.3rem">background</span> }
+                @if (t.InProgress) { <span class="badge warn" style="margin-right:.3rem">in progress</span> }
+                <a href="@Fmt.TraceUrl(t.TraceId)">@Fmt.OneLine(t.DisplayTitle, 90)</a>
+                <div class="muted mono" style="font-size:.7rem">@t.TraceId</div>
+            </td>
+            <td class="nowrap">@Clients.GetDisplayName(t.ClientId)</td>
+            <td>
+                @foreach (var m in t.LlmCalls.Select(c => c.Span.Model).Distinct())
+                {
+                    <span class="badge" style="margin:0 .2rem .2rem 0">@m</span>
+                }
+            </td>
+            <td class="num">@t.Totals.LlmCalls</td>
+            <td class="num">@t.Totals.ToolCalls</td>
+            <td class="num">@Fmt.Duration((t.End - t.Start).TotalMilliseconds)</td>
+            <td class="num"><strong>@Fmt.Tokens(t.Totals.Total)</strong></td>
+            <td><MiniWaterfall Trace="t" /></td>
+        </tr>
+    };
+
+    private void SetView(string? view)
+    {
+        _limit = PageSize;
+        Nav.NavigateTo(view is null ? "traces" : $"traces?view={view}");
+    }
+
+    private void Toggle(string id)
+    {
+        if (!_open.Remove(id))
+        {
+            _open.Add(id);
+        }
+    }
+
+    private IEnumerable<TraceAnalysis> FilteredTraces() =>
+        _traces.Where(t => (_showBackground || !t.IsBackground) && Matches(t));
+
+    private IEnumerable<(TraceAnalysis Trace, SpanNode Call)> FilteredCalls() =>
+        FilteredTraces()
+            .SelectMany(t => t.LlmCalls.Select(c => (t, c)))
+            .OrderByDescending(x => x.c.Span.StartTime);
+
+    private bool Matches(TraceAnalysis t)
+    {
+        if (string.IsNullOrWhiteSpace(_filter))
+        {
+            return true;
+        }
+
+        bool Has(string? value) => value?.Contains(_filter, StringComparison.OrdinalIgnoreCase) == true;
+        return Has(t.DisplayTitle) || Has(t.TraceId) || Has(Clients.GetDisplayName(t.ClientId))
+               || t.LlmCalls.Any(c => Has(c.Span.Model) || Has(c.Span.DebugLabel))
+               || t.ToolCalls.Any(c => Has(c.Span.ToolName));
+    }
+
+    private RenderFragment ShowMore(int total, string noun = "item") => __builder =>
+    {
+        if (total > _limit)
+        {
+            <div style="text-align:center;margin-top:.75rem">
+                <button class="btn" @onclick="() => _limit += PageSize">Show more (@(total - _limit) remaining)</button>
+            </div>
+        }
+        else
+        {
+            <div class="muted" style="font-size:.78rem;margin-top:.5rem">@total @noun@(total == 1 ? "" : "s")</div>
+        }
+    };
+}

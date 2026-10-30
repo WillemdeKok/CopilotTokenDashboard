@@ -1,0 +1,332 @@
+@page "/spans/{Id}"
+@inherits LiveComponentBase
+@inject InsightsService Insights
+@inject ITokenCounter Counter
+
+<PageTitle>@Title · Tool Calls Inspector</PageTitle>
+
+@if (Loading)
+{
+    <div class="muted">Loading…</div>
+}
+else if (_node is null || _trace is null)
+{
+    <div class="panel empty">
+        <h2>Span not found</h2>
+        <p><a href="sessions">Back to sessions</a></p>
+    </div>
+}
+else
+{
+    var s = _node.Span;
+    <div class="page-header">
+        <div>
+            <div class="muted" style="font-size:.8rem">
+                <a href="sessions">Sessions</a> /
+                <a href="@Fmt.SessionUrl(_trace.SessionKey)">@Fmt.OneLine(_trace.DisplayTitle, 70)</a>
+                @if (_node.Parent is { } parent && parent.Category != SpanCategory.Other)
+                {
+                    <span> / <a href="@Fmt.SpanUrl(parent.Span.Id)">@Label(parent)</a></span>
+                }
+            </div>
+            <h1>@Title</h1>
+            <div class="subtitle">@Fmt.DateTime(s.StartTime) · @Fmt.Duration(s.DurationMs) · <span class="mono">@s.Name</span></div>
+        </div>
+        <div style="display:flex;gap:.5rem">
+            <a class="btn" href="@Fmt.TraceUrl(_trace.TraceId, s.Id)">🧵 View in trace</a>
+            @if (_node.Category == SpanCategory.LlmCall)
+            {
+                @if (Sibling(-1) is { } prev)
+                {
+                    <a class="btn" href="@Fmt.SpanUrl(prev.Span.Id)">← Call #@prev.CallIndex</a>
+                }
+                @if (Sibling(1) is { } next)
+                {
+                    <a class="btn" href="@Fmt.SpanUrl(next.Span.Id)">Call #@next.CallIndex →</a>
+                }
+            }
+        </div>
+    </div>
+
+    @switch (_node.Category)
+    {
+        case SpanCategory.LlmCall:
+            @LlmCallView(_node)
+            break;
+        case SpanCategory.Tool:
+            @ToolView(_node)
+            break;
+        case SpanCategory.Agent:
+            @AgentView(_node)
+            break;
+        default:
+            <div class="panel">
+                <h2>Details</h2>
+                @if (s.HookType is not null)
+                {
+                    <p>Hook <strong>@s.HookType</strong> → decision <span class="badge">@(s.HookDecision ?? "n/a")</span></p>
+                }
+            </div>
+            break;
+    }
+
+    @if (_content?.AttributesJson is { } attrs)
+    {
+        <div class="panel">
+            <h2><button class="btn-link" style="font-size:1rem" @onclick="() => _showRaw = !_showRaw">@(_showRaw ? "▾" : "▸") Raw span attributes</button></h2>
+            @if (_showRaw)
+            {
+                <pre class="code">@JsonPretty.Format(attrs)</pre>
+                @if (!string.IsNullOrEmpty(_content.ResourceJson))
+                {
+                    <div class="muted" style="font-size:.75rem">Resource</div>
+                    <pre class="code">@JsonPretty.Format(_content.ResourceJson)</pre>
+                }
+            }
+        </div>
+    }
+}
+
+@code {
+    [Parameter] public string Id { get; set; } = string.Empty;
+
+    private TraceAnalysis? _trace;
+    private SpanNode? _node;
+    private SpanContent? _content;
+    private IReadOnlyList<ChatMessage>? _input;
+    private IReadOnlyList<ChatMessage>? _output;
+    private bool _showRaw;
+    private bool _showSystem;
+    private string? _loadedId;
+
+    private string Title => _node is null ? "Span" : Label(_node);
+
+    protected override async Task LoadAsync()
+    {
+        if (_loadedId != Id)
+        {
+            _loadedId = Id;
+            _showRaw = _showSystem = false;
+        }
+
+        var found = await Insights.FindSpanAsync(Id);
+        _trace = found?.Trace;
+        _node = found?.Node;
+        _content = null;
+        _input = _output = null;
+        if (_node is not null)
+        {
+            var content = await Insights.GetContentAsync([_node.Span.Id]);
+            _content = content.GetValueOrDefault(_node.Span.Id);
+            _input = GenAiMessageParser.TryParse(_content?.InputMessages);
+            _output = GenAiMessageParser.TryParse(_content?.OutputMessages);
+        }
+    }
+
+    protected override bool IsRelevant(ToolCallsInspector.Core.Ingestion.SpansIngestedEvent e) =>
+        _trace is null || e.TraceIds.Contains(_trace.TraceId);
+
+    private static string Label(SpanNode n) => n.Category switch
+    {
+        SpanCategory.LlmCall => $"LLM call{(n.CallIndex is { } i ? $" #{i}" : "")} · {n.Span.Model}",
+        SpanCategory.Tool => $"Tool: {n.Span.ToolName ?? n.Span.Name}",
+        SpanCategory.Agent => n.IsPlaceholder ? "Agent (in progress)" : $"Agent: {n.Span.AgentName ?? n.Span.Name}",
+        SpanCategory.Hook => $"Hook: {n.Span.HookType ?? n.Span.Name}",
+        _ => n.Span.Name,
+    };
+
+    private SpanNode? Sibling(int offset)
+    {
+        if (_node?.CallIndex is not { } index)
+        {
+            return null;
+        }
+
+        var siblings = _node.Parent?.Children ?? _trace!.Roots.ToList();
+        return siblings.FirstOrDefault(c => c.Category == SpanCategory.LlmCall && c.CallIndex == index + offset);
+    }
+
+    private static string Preview(string? text, int max = 20_000) =>
+        string.IsNullOrEmpty(text) ? "(not captured)" : text.Length > max ? text[..max] + $"\n… ({text.Length - max:N0} more chars)" : text;
+
+    private RenderFragment LlmCallView(SpanNode node) => __builder =>
+    {
+        var s = node.Span;
+        var slices = CallSlices.For(node);
+        var comp = node.Composition;
+        var utilization = s.MaxPromptTokens is > 0 && s.InputTokens is { } inp ? (double)inp / s.MaxPromptTokens.Value : (double?)null;
+
+        <div class="grid kpis">
+            <Kpi Label="Input tokens" Value="@Fmt.Tokens(s.InputTokens)" Sub="@($"{Fmt.Tokens(s.CacheReadTokens ?? 0)} cached{(s.CacheCreationTokens > 0 ? $" · {Fmt.Tokens(s.CacheCreationTokens)} cache write" : "")}")" />
+            <Kpi Label="Output tokens" Value="@Fmt.Tokens(s.OutputTokens)" Sub="@(s.ReasoningTokens > 0 ? $"{Fmt.Tokens(s.ReasoningTokens)} reasoning" : (s.FinishReasons ?? ""))" />
+            <Kpi Label="Total" Value="@Fmt.Tokens((s.InputTokens ?? 0) + (s.OutputTokens ?? 0))" Sub="input + output" />
+            <Kpi Label="Context used" Value="@(utilization is { } u ? Fmt.Ratio(u) : "–")" Sub="@(s.MaxPromptTokens is { } max ? $"of {Fmt.Tokens(max)} prompt budget" : "max prompt size unknown")" />
+            <Kpi Label="Latency" Value="@Fmt.Duration(s.DurationMs)" Sub="@(s.TimeToFirstTokenMs is { } ttft ? $"TTFT {Fmt.Duration(ttft)}" : "")" />
+            <Kpi Label="Agent" Value="@(s.AgentName ?? "–")" Sub="@s.DebugLabel" />
+        </div>
+
+        <div class="grid cols-2">
+            <div class="panel">
+                <h2>What was sent and generated</h2>
+                @if (comp is not null)
+                {
+                    <div class="callout @(comp.Method == AttributionMethod.Delta ? "warn" : "")" title="@CallSlices.MethodDescription(comp.Method)">
+                        Input breakdown <strong>@CallSlices.MethodLabel(comp.Method)</strong>. @CallSlices.MethodDescription(comp.Method)
+                    </div>
+                }
+                <Donut Slices="slices" CenterLabel="call tokens">
+                    <BreakdownTable Slices="slices" ToolDetails="comp?.ToolResultsByTool" />
+                </Donut>
+            </div>
+            <div class="panel">
+                <h2>Tools requested by this call</h2>
+                @if (node.RequestedTools.Count == 0)
+                {
+                    <div class="muted">None — this call produced a final answer@(s.FinishReasons is null ? "" : $" ({s.FinishReasons})").</div>
+                }
+                else
+                {
+                    <table class="data">
+                        <thead><tr><th>Tool</th><th class="num">Duration</th><th class="num">Added to context</th></tr></thead>
+                        <tbody>
+                            @foreach (var tool in node.RequestedTools.OrderBy(t => t.Span.StartTime))
+                            {
+                                <tr>
+                                    <td><a class="mono" href="@Fmt.SpanUrl(tool.Span.Id)">@(tool.Span.ToolName ?? tool.Span.Name)</a>
+                                        @if (tool.Span.StatusCode == 2) { <span class="badge err">failed</span> }
+                                    </td>
+                                    <td class="num">@Fmt.Duration(tool.Span.DurationMs)</td>
+                                    <td class="num">@(tool.IntroducedTokens is { } it ? Fmt.Tokens(it) + (tool.IntroducedIsEstimate ? " (est.)" : "") : "–")</td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                }
+                @if (!string.IsNullOrWhiteSpace(_content?.UserRequest))
+                {
+                    <h3 style="margin-top:1rem">User request</h3>
+                    <pre class="code">@Preview(_content.UserRequest, 1500)</pre>
+                }
+            </div>
+        </div>
+
+        <div class="panel">
+            <h2>Response</h2>
+            @if (_output is { Count: > 0 })
+            {
+                <MessageList @key="@($"{Id}-out")" Messages="_output" ExpandAll="true" />
+            }
+            else
+            {
+                <pre class="code">@Preview(_content?.OutputMessages)</pre>
+            }
+            @if (!string.IsNullOrWhiteSpace(_content?.ReasoningContent))
+            {
+                <h3 style="margin-top:.75rem">Reasoning</h3>
+                <pre class="code">@Preview(_content.ReasoningContent)</pre>
+            }
+        </div>
+
+        <div class="panel">
+            <h2>Prompt messages @(_input is null ? "" : $"({_input.Count})")</h2>
+            @if (_input is { Count: > 0 })
+            {
+                <div class="muted" style="font-size:.8rem;margin-bottom:.5rem">Token counts are local o200k estimates; click a message to expand.</div>
+                <MessageList @key="@($"{Id}-in")" Messages="_input" />
+            }
+            else if (!string.IsNullOrEmpty(_content?.InputMessages))
+            {
+                <div class="callout warn">The captured messages could not be parsed (likely truncated by the exporter at 64K characters). Showing raw content.</div>
+                <pre class="code">@Preview(_content.InputMessages)</pre>
+            }
+            else
+            {
+                <div class="muted">Prompt content was not captured. Enable <span class="mono">github.copilot.chat.otel.captureContent</span> for full detail.</div>
+            }
+        </div>
+
+        @if (!string.IsNullOrWhiteSpace(_content?.SystemInstructions))
+        {
+            <div class="panel">
+                <h2><button class="btn-link" style="font-size:1rem" @onclick="() => _showSystem = !_showSystem">@(_showSystem ? "▾" : "▸") System instructions</button>
+                    <span class="muted" style="font-size:.8rem;font-weight:400">≈ @Fmt.Tokens((double)Counter.Count(_content.SystemInstructions)) tokens</span></h2>
+                @if (_showSystem)
+                {
+                    <pre class="code">@Preview(_content.SystemInstructions, 100_000)</pre>
+                }
+            </div>
+        }
+    };
+
+    private RenderFragment ToolView(SpanNode node) => __builder =>
+    {
+        var s = node.Span;
+        <div class="grid kpis">
+            <Kpi Label="Status" Value="@(s.StatusCode == 2 || s.ErrorType is not null ? "Failed" : "OK")" Sub="@(s.ErrorType ?? s.StatusMessage)" />
+            <Kpi Label="Duration" Value="@Fmt.Duration(s.DurationMs)" />
+            <Kpi Label="Added to context" Value="@(node.IntroducedTokens is { } it ? Fmt.Tokens(it) : "–")" Sub="@(node.IntroducedIsEstimate ? "estimated from result size" : "measured from input growth")" />
+            <Kpi Label="Tool call id" Value="@Fmt.Truncate(s.ToolCallId ?? "–", 18)" Sub="@s.ToolType" />
+        </div>
+        @if (node.RequestedBy is { } by)
+        {
+            <div class="callout">Requested by <a href="@Fmt.SpanUrl(by.Span.Id)">LLM call #@by.CallIndex (@by.Span.Model)</a>. Its result is re-sent as input on every later call in this interaction.</div>
+        }
+        <div class="grid cols-2">
+            <div class="panel">
+                <h2>Arguments</h2>
+                <pre class="code">@Preview(JsonPretty.Format(_content?.ToolArguments))</pre>
+            </div>
+            <div class="panel">
+                <h2>Result <span class="muted" style="font-size:.8rem;font-weight:400">@(_content?.ToolResult is { } r ? $"≈ {Fmt.Tokens((double)Counter.Count(r))} tokens · {r.Length:N0} chars" : "")</span></h2>
+                <pre class="code">@Preview(_content?.ToolResult)</pre>
+            </div>
+        </div>
+        @if (node.Children.Count > 0)
+        {
+            <div class="panel">
+                <h2>Nested activity</h2>
+                @foreach (var child in node.Children.OrderBy(c => c.Span.StartTime))
+                {
+                    <SpanItem @key="child.Span.Id" Node="child" />
+                }
+            </div>
+        }
+    };
+
+    private RenderFragment AgentView(SpanNode node) => __builder =>
+    {
+        var calls = node.Descendants().Where(d => d.Category == SpanCategory.LlmCall).ToList();
+        var totals = new TokenTotals();
+        calls.ForEach(totals.AddLlmCall);
+        node.Descendants().Where(d => d.Category == SpanCategory.Tool).ToList().ForEach(totals.AddToolCall);
+        var slices = totals.Slices();
+
+        <div class="grid kpis">
+            <Kpi Label="Total tokens" Value="@Fmt.Tokens(totals.Total)" Sub="@($"in {Fmt.Tokens(totals.Input)} · out {Fmt.Tokens(totals.Output)}")" />
+            <Kpi Label="LLM calls" Value="@totals.LlmCalls.ToString()" />
+            <Kpi Label="Tool calls" Value="@totals.ToolCalls.ToString()" />
+            <Kpi Label="Cache hit rate" Value="@Fmt.Ratio(totals.CacheHitRate)" />
+        </div>
+        @if (!string.IsNullOrWhiteSpace(node.Span.UserPrompt))
+        {
+            <div class="panel"><h2>Prompt</h2><pre class="code">@node.Span.UserPrompt</pre></div>
+        }
+        <div class="grid cols-2">
+            <div class="panel">
+                <h2>Token breakdown</h2>
+                <Donut Slices="slices" CenterLabel="agent tokens"><BreakdownTable Slices="slices" /></Donut>
+            </div>
+            <div class="panel">
+                <h2>Context growth per LLM call</h2>
+                <CallColumns Calls="node.Children.Where(c => c.Category == SpanCategory.LlmCall).OrderBy(c => c.Span.StartTime).ToList()" />
+            </div>
+        </div>
+        <div class="panel">
+            <h2>Timeline</h2>
+            @foreach (var item in node.TimelineItems())
+            {
+                <SpanItem @key="item.Span.Id" Node="item" />
+            }
+        </div>
+    };
+}

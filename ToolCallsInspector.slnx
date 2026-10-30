@@ -1,0 +1,15 @@
+<Solution>
+  <Folder Name="/samples/">
+    <Project Path="samples/WeatherApi/WeatherApi.csproj" />
+  </Folder>
+  <Folder Name="/src/">
+    <Project Path="src/ToolCallsInspector.AppHost/ToolCallsInspector.AppHost.csproj" />
+    <Project Path="src/ToolCallsInspector.Core/ToolCallsInspector.Core.csproj" />
+    <Project Path="src/ToolCallsInspector.Ingestion.Otlp/ToolCallsInspector.Ingestion.Otlp.csproj" />
+    <Project Path="src/ToolCallsInspector.Web/ToolCallsInspector.Web.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/ToolCallsInspector.Tests/ToolCallsInspector.Tests.csproj" />
+    <Project Path="tests/WeatherApi.Tests/WeatherApi.Tests.csproj" />
+  </Folder>
+</Solution>

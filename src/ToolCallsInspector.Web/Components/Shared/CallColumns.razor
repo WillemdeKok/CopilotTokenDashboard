@@ -1,0 +1,72 @@
+@inject NavigationManager Nav
+@{
+    var calls = Calls;
+    var max = calls.Count == 0 ? 1 : Math.Max(1, calls.Max(c => (double)((c.Span.InputTokens ?? 0) + (c.Span.OutputTokens ?? 0))));
+    const double chartHeight = 200, top = 16, left = 48, colWidth = 26, gap = 8;
+    var width = Math.Max(600, left + calls.Count * (colWidth + gap) + 20);
+    var keys = new[] { TokenTotals.OutputKey }.Concat(Enum.GetNames<TokenCategory>()).ToArray();
+}
+<div class="columns-chart">
+    @if (calls.Count == 0)
+    {
+        <div class="muted">No LLM calls.</div>
+    }
+    else
+    {
+        <svg width="@F(width)" height="@F(chartHeight + top + 40)">
+            @for (var i = 0; i <= 4; i++)
+            {
+                var y = top + chartHeight - chartHeight * i / 4;
+                <line x1="@F(left - 4)" x2="@F(width)" y1="@F(y)" y2="@F(y)" stroke="#eef0f4" />
+                <g><text x="@F(left - 8)" y="@F(y + 4)" font-size="10" text-anchor="end" fill="#6b7280">@Fmt.Tokens(max * i / 4)</text></g>
+            }
+            @for (var i = 0; i < calls.Count; i++)
+            {
+                var call = calls[i];
+                var x = left + i * (colWidth + gap);
+                var slices = CallSlices.For(call);
+                var y = top + chartHeight;
+                var id = call.Span.Id;
+                // Draw input categories bottom-up, then output on top.
+                foreach (var key in keys.Skip(1).Append(TokenTotals.OutputKey))
+                {
+                    var slice = slices.First(s => s.Key == key);
+                    if (slice.Value <= 0) { continue; }
+                    var h = slice.Value / max * chartHeight;
+                    y -= h;
+                    <rect class="col" x="@F(x)" y="@F(y)" width="@F(colWidth)" height="@F(Math.Max(h, 0.5))" fill="@Palette.For(key)" @onclick="() => Open(id)">
+                        <title>@Tooltip(call, slice)</title>
+                    </rect>
+                }
+                <g><text x="@F(x + colWidth / 2)" y="@F(top + chartHeight + 14)" font-size="10" text-anchor="middle" fill="#6b7280">@(i + 1)</text></g>
+                @if (call.Composition?.Method == AttributionMethod.Delta)
+                {
+                    <g><text x="@F(x + colWidth / 2)" y="@F(top + chartHeight + 26)" font-size="9" text-anchor="middle" fill="#d97706">≈</text></g>
+                }
+            }
+        </svg>
+        <div class="legend">
+            @foreach (var key in keys)
+            {
+                <span class="item"><span class="swatch" style="background:@Palette.For(key)"></span>@(key == TokenTotals.OutputKey ? "LLM output" : TokenCategoryInfo.Label(Enum.Parse<TokenCategory>(key)))</span>
+            }
+            <span class="item muted">≈ = estimated from token growth · click a column to inspect the call</span>
+        </div>
+    }
+</div>
+
+@code {
+    [Parameter, EditorRequired] public IReadOnlyList<SpanNode> Calls { get; set; } = [];
+
+    private void Open(string id) => Nav.NavigateTo(Fmt.SpanUrl(id));
+
+    private static string F(double v) => v.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
+
+    private static string Tooltip(SpanNode call, BreakdownSlice slice)
+    {
+        var s = call.Span;
+        return $"#{call.CallIndex} {s.Model} · {s.AgentName ?? s.DebugLabel}\n{slice.Label}: {Fmt.Exact(slice.Value)} tokens\nInput {Fmt.Exact(s.InputTokens ?? 0)} · Output {Fmt.Exact(s.OutputTokens ?? 0)} · Cached {Fmt.Exact(s.CacheReadTokens ?? 0)}";
+    }
+}
+
+

@@ -1,0 +1,43 @@
+<table class="data">
+    <thead>
+        <tr><th>Category</th><th class="num">Tokens</th><th class="num">Share</th></tr>
+    </thead>
+    <tbody>
+        @foreach (var slice in Slices)
+        {
+            <tr title="@slice.Description">
+                <td><span class="swatch" style="background:@Palette.For(slice.Key)"></span> @slice.Label
+                    @if (!string.IsNullOrEmpty(slice.Description) && ShowDescriptions)
+                    {
+                        <div class="muted" style="font-size:.75rem">@slice.Description</div>
+                    }
+                </td>
+                <td class="num">@Fmt.Exact(slice.Value)</td>
+                <td class="num">@Fmt.Pct(slice.Percent)</td>
+            </tr>
+            @if (slice.Key == nameof(TokenCategory.ToolResults) && ToolDetails is { Count: > 0 })
+            {
+                @foreach (var (tool, value) in ToolDetails.OrderByDescending(t => t.Value).Take(MaxToolRows))
+                {
+                    <tr>
+                        <td style="padding-left:2rem" class="muted">↳ <span class="mono">@tool</span></td>
+                        <td class="num muted">@Fmt.Exact(value)</td>
+                        <td class="num muted">@Fmt.Pct(Total > 0 ? value / Total * 100 : 0)</td>
+                    </tr>
+                }
+            }
+        }
+    </tbody>
+    <tfoot>
+        <tr><th>Total</th><th class="num">@Fmt.Exact(Total)</th><th class="num">100%</th></tr>
+    </tfoot>
+</table>
+
+@code {
+    [Parameter, EditorRequired] public IReadOnlyList<BreakdownSlice> Slices { get; set; } = [];
+    [Parameter] public IReadOnlyDictionary<string, double>? ToolDetails { get; set; }
+    [Parameter] public bool ShowDescriptions { get; set; }
+    [Parameter] public int MaxToolRows { get; set; } = 8;
+
+    private double Total => Slices.Sum(s => s.Value);
+}

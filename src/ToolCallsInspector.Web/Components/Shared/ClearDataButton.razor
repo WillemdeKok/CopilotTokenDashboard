@@ -1,0 +1,92 @@
+@using ToolCallsInspector.Core.Ingestion
+@inject ISpanStore Store
+@inject InspectorEvents Events
+@inject NavigationManager Nav
+@implements IDisposable
+
+<div class="clear-data @(Compact ? "compact" : "")">
+    @if (_state == State.Idle)
+    {
+        <button class="btn danger" @onclick="Arm" title="Delete all captured telemetry from the local database">🗑️ Clear all data</button>
+    }
+    else if (_state == State.Confirm)
+    {
+        <div class="confirm-text">Delete all sessions, calls and tool data? This can't be undone.</div>
+        <div class="confirm-actions">
+            <button class="btn danger-solid" @onclick="ClearAsync">Delete everything</button>
+            <button class="btn" @onclick="Reset">Cancel</button>
+        </div>
+    }
+    else if (_state == State.Busy)
+    {
+        <button class="btn" disabled>Clearing…</button>
+    }
+    else
+    {
+        <div class="confirm-text">@_message</div>
+    }
+</div>
+
+@code {
+    private enum State { Idle, Confirm, Busy, Done }
+
+    [Parameter] public bool Compact { get; set; }
+    [Parameter] public EventCallback OnCleared { get; set; }
+
+    private State _state;
+    private string? _message;
+    private CancellationTokenSource? _resetTimer;
+
+    private void Arm()
+    {
+        _state = State.Confirm;
+        ScheduleReset(TimeSpan.FromSeconds(10));
+    }
+
+    private void Reset()
+    {
+        _resetTimer?.Cancel();
+        _state = State.Idle;
+    }
+
+    private async Task ClearAsync()
+    {
+        _resetTimer?.Cancel();
+        _state = State.Busy;
+        try
+        {
+            await Store.ClearAsync();
+            Events.PublishCleared();
+            _message = "✓ All data cleared.";
+            await OnCleared.InvokeAsync();
+
+            var path = Nav.ToBaseRelativePath(Nav.Uri);
+            if (path.StartsWith("sessions/", StringComparison.OrdinalIgnoreCase) || path.StartsWith("spans/", StringComparison.OrdinalIgnoreCase))
+            {
+                Nav.NavigateTo("");
+            }
+        }
+        catch (Exception ex)
+        {
+            _message = $"Failed to clear data: {ex.Message}";
+        }
+
+        _state = State.Done;
+        ScheduleReset(TimeSpan.FromSeconds(4));
+    }
+
+    private void ScheduleReset(TimeSpan after)
+    {
+        _resetTimer?.Cancel();
+        var cts = _resetTimer = new CancellationTokenSource();
+        _ = Task.Delay(after, cts.Token).ContinueWith(t =>
+        {
+            if (!t.IsCanceled)
+            {
+                _ = InvokeAsync(() => { _state = State.Idle; StateHasChanged(); });
+            }
+        }, TaskScheduler.Default);
+    }
+
+    public void Dispose() => _resetTimer?.Cancel();
+}

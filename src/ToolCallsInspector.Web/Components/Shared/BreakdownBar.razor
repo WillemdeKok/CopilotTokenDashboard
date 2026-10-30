@@ -1,0 +1,40 @@
+@{
+    var total = Slices.Sum(s => s.Value);
+}
+<div class="stacked-bar @(Small ? "small" : "")" title="@(Small ? Tooltip() : null)">
+    @if (total > 0)
+    {
+        @foreach (var slice in Slices.Where(s => s.Value > 0))
+        {
+            <div style="width:@Width(slice.Value, total);background:@Palette.For(slice.Key)" title="@slice.Label: @Fmt.Exact(slice.Value) tokens (@Fmt.Pct(slice.Value / total * 100))"></div>
+        }
+    }
+</div>
+@if (ShowLegend)
+{
+    <div class="legend">
+        @foreach (var slice in Slices.Where(s => s.Value > 0 || ShowEmpty))
+        {
+            <span class="item" title="@slice.Description">
+                <span class="swatch" style="background:@Palette.For(slice.Key)"></span>
+                @slice.Label <strong>@Fmt.Pct(total > 0 ? slice.Value / total * 100 : 0)</strong>
+            </span>
+        }
+    </div>
+}
+
+@code {
+    [Parameter, EditorRequired] public IReadOnlyList<BreakdownSlice> Slices { get; set; } = [];
+    [Parameter] public bool ShowLegend { get; set; }
+    [Parameter] public bool ShowEmpty { get; set; }
+    [Parameter] public bool Small { get; set; }
+
+    private static string Width(double value, double total) =>
+        (value / total * 100).ToString("0.###", System.Globalization.CultureInfo.InvariantCulture) + "%";
+
+    private string Tooltip()
+    {
+        var total = Slices.Sum(s => s.Value);
+        return string.Join("\n", Slices.Where(s => s.Value > 0).Select(s => $"{s.Label}: {Fmt.Tokens(s.Value)} ({Fmt.Pct(total > 0 ? s.Value / total * 100 : 0)})"));
+    }
+}

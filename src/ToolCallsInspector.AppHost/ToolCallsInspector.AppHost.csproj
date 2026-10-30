@@ -1,0 +1,19 @@
+<Project Sdk="Aspire.AppHost.Sdk/13.6.4">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <UserSecretsId>tool-calls-inspector-apphost</UserSecretsId>
+    <!-- Uses the NuGet-restored dashboard/DCP, so `dotnet run` works without installing the Aspire CLI. -->
+    <AspireUseCliBundle>false</AspireUseCliBundle>
+    <NoWarn>$(NoWarn);ASPIRE010</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\ToolCallsInspector.Web\ToolCallsInspector.Web.csproj" />
+    <ProjectReference Include="..\..\samples\WeatherApi\WeatherApi.csproj" />
+  </ItemGroup>
+
+</Project>

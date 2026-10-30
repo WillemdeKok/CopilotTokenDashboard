@@ -1,0 +1,25 @@
+@inherits LayoutComponentBase
+
+<div class="app">
+    <nav class="sidebar">
+        <div class="brand">🔍 Tool Calls Inspector<small>Copilot token insights</small></div>
+        <NavLink class="nav-link" href="" Match="NavLinkMatch.All">📊 Dashboard</NavLink>
+        <NavLink class="nav-link" href="sessions">💬 Sessions</NavLink>
+        <NavLink class="nav-link" href="traces">🧵 Traces</NavLink>
+        <NavLink class="nav-link" href="tools">🔧 Tools</NavLink>
+        <NavLink class="nav-link" href="setup">⚙️ Setup &amp; status</NavLink>
+        <div class="footer">
+            <ClearDataButton Compact="true" />
+            <div style="padding:.5rem"><span class="live-dot"></span>OTLP receiver on <span class="mono">:4318</span></div>
+        </div>
+    </nav>
+    <main class="content">
+        @Body
+    </main>
+</div>
+
+<div id="blazor-error-ui" data-nosnippet>
+    An unhandled error has occurred.
+    <a href="." class="reload">Reload</a>
+    <span class="dismiss">🗙</span>
+</div>

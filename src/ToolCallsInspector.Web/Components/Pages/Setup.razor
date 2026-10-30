@@ -1,0 +1,156 @@
+@page "/setup"
+@using ToolCallsInspector.Core.Ingestion
+@inherits LiveComponentBase
+@inject IngestionStatus Status
+@inject InspectorOptions Options
+@inject DemoDataService Demo
+@inject ISpanStore Store
+
+<PageTitle>Setup · Tool Calls Inspector</PageTitle>
+
+<div class="page-header">
+    <div>
+        <h1>Setup &amp; status</h1>
+        <div class="subtitle">Connect Copilot clients to the inspector's OTLP receiver.</div>
+    </div>
+</div>
+
+<div class="grid cols-2">
+    <div class="panel">
+        <h2>1. VS Code Copilot Chat</h2>
+        <p>Add to your VS Code <span class="mono">settings.json</span> (user or workspace), then reload the window:</p>
+        <pre class="code">@VsCodeSettings</pre>
+        <p class="muted" style="font-size:.85rem">
+            <span class="mono">captureContent</span> includes prompts, responses and tool payloads. It enables exact per-category token
+            attribution and message inspection. Data never leaves this machine — it is only sent to this local inspector.
+            Without it, attribution falls back to estimates derived from token growth between calls.
+        </p>
+    </div>
+    <div class="panel">
+        <h2>2. Copilot CLI / Copilot app</h2>
+        <p>The CLI (which also powers the Copilot app) exports OTel when <span class="mono">OTEL_EXPORTER_OTLP_ENDPOINT</span> is set. Set these environment variables before starting it (see <span class="mono">copilot help monitoring</span>):</p>
+        <pre class="code">@CliEnv</pre>
+        <p class="muted" style="font-size:.85rem">Any other OTLP/HTTP exporter that follows the GenAI conventions works too. Both JSON and protobuf payloads are accepted on <span class="mono">/v1/traces</span>.</p>
+    </div>
+</div>
+
+<div class="grid cols-2">
+    <div class="panel">
+        <h2>Ingestion status</h2>
+        @if (_sources.Count == 0)
+        {
+            <div class="muted">Nothing received since the inspector started. Waiting for telemetry on <span class="mono">http://localhost:4318/v1/traces</span>…</div>
+        }
+        else
+        {
+            <table class="data">
+                <thead><tr><th>Source</th><th class="num">Batches</th><th class="num">Spans</th><th class="num">Last received</th><th>Last error</th></tr></thead>
+                <tbody>
+                    @foreach (var src in _sources)
+                    {
+                        <tr>
+                            <td>@src.Source</td>
+                            <td class="num">@src.Batches</td>
+                            <td class="num">@src.Spans</td>
+                            <td class="num">@(src.LastReceived is { } lr ? Fmt.Relative(lr) : "–")</td>
+                            <td>@(src.LastError ?? "–")</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        }
+    </div>
+    <div class="panel">
+        <h2>Data</h2>
+        <table class="data" style="margin-bottom:1rem">
+            <tbody>
+                <tr><td class="muted">Database file</td><td class="mono">@Options.DatabasePath</td></tr>
+                <tr><td class="muted">Size on disk</td><td>@FormatBytes(_dbBytes)</td></tr>
+                <tr><td class="muted">Stored</td><td>@_stats.Traces.ToString("N0") traces · @_stats.Spans.ToString("N0") spans</td></tr>
+            </tbody>
+        </table>
+        <p>Load a realistic sample (agent loop with tools, a sub-agent and a background request) to explore the UI.</p>
+        <div style="display:flex;gap:.75rem;flex-wrap:wrap;align-items:flex-start">
+            <button class="btn primary" @onclick="LoadDemoAsync" disabled="@_busy">Load demo data</button>
+            <ClearDataButton />
+        </div>
+        <p class="muted" style="font-size:.8rem;margin-top:.75rem">
+            Clearing deletes all captured sessions from the local SQLite database and compacts the file. It is also available at the bottom of the sidebar.
+        </p>
+        @if (_message is not null)
+        {
+            <div class="callout" style="margin-top:.75rem">@_message</div>
+        }
+    </div>
+</div>
+
+@code {
+    private const string VsCodeSettings = """
+        {
+          "github.copilot.chat.otel.enabled": true,
+          "github.copilot.chat.otel.exporterType": "otlp-http",
+          "github.copilot.chat.otel.otlpEndpoint": "http://localhost:4318",
+          "github.copilot.chat.otel.captureContent": true
+        }
+        """;
+
+    private const string CliEnv = """
+        # PowerShell - current terminal, then start `copilot`
+        $env:OTEL_EXPORTER_OTLP_ENDPOINT = "http://localhost:4318"
+        $env:OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT = "true"
+
+        # PowerShell - permanently (also the Copilot app; restart the app afterwards)
+        setx OTEL_EXPORTER_OTLP_ENDPOINT "http://localhost:4318"
+        setx OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT "true"
+
+        # bash / zsh
+        export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318
+        export OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=true
+        """;
+
+    private IReadOnlyList<SourceStatus> _sources = [];
+    private StoreStats _stats = new(0, 0);
+    private long _dbBytes;
+    private bool _busy;
+    private string? _message;
+
+    protected override async Task LoadAsync()
+    {
+        _sources = Status.Sources;
+        _stats = await Store.GetStatsAsync();
+        _dbBytes = new[] { "", "-wal", "-shm" }
+            .Select(suffix => new FileInfo(Options.DatabasePath + suffix))
+            .Where(f => f.Exists)
+            .Sum(f => f.Length);
+        if (_stats.Spans == 0 && _message?.StartsWith("Loaded") == true)
+        {
+            _message = null;
+        }
+    }
+
+    private async Task LoadDemoAsync()
+    {
+        _busy = true;
+        try
+        {
+            var count = await Demo.LoadAsync();
+            _message = $"Loaded {count} demo spans. Open the dashboard to explore.";
+        }
+        catch (Exception ex)
+        {
+            _message = $"Failed to load demo data: {ex.Message}";
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private static string FormatBytes(long bytes) => bytes switch
+    {
+        >= 1L << 30 => $"{bytes / (double)(1L << 30):0.##} GB",
+        >= 1L << 20 => $"{bytes / (double)(1L << 20):0.#} MB",
+        >= 1L << 10 => $"{bytes / 1024.0:0} KB",
+        _ => $"{bytes} B",
+    };
+}

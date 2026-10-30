@@ -1,0 +1,35 @@
+<table class="data">
+    <thead>
+        <tr>
+            <th>Session</th>
+            <th>Client</th>
+            <th class="num">Last activity</th>
+            <th class="num">Interactions</th>
+            <th class="num">LLM calls</th>
+            <th class="num">Tool calls</th>
+            <th class="num">Tokens</th>
+            <th style="width:160px">Breakdown</th>
+        </tr>
+    </thead>
+    <tbody>
+        @foreach (var s in Sessions)
+        {
+            <tr class="clickable" @onclick="() => Nav.NavigateTo(Fmt.SessionUrl(s.SessionKey))">
+                <td><a href="@Fmt.SessionUrl(s.SessionKey)">@Fmt.OneLine(s.Title, 90)</a></td>
+                <td class="nowrap">@Clients.GetDisplayName(s.ClientId)</td>
+                <td class="num" title="@Fmt.DateTime(s.End)">@Fmt.Relative(s.End)</td>
+                <td class="num">@s.InteractionCount</td>
+                <td class="num">@s.Totals.LlmCalls</td>
+                <td class="num">@s.Totals.ToolCalls</td>
+                <td class="num"><strong>@Fmt.Tokens(s.Totals.Total)</strong></td>
+                <td><BreakdownBar Slices="s.Totals.Slices()" Small="true" /></td>
+            </tr>
+        }
+    </tbody>
+</table>
+
+@code {
+    [Inject] private NavigationManager Nav { get; set; } = default!;
+    [Inject] private IClientCatalog Clients { get; set; } = default!;
+    [Parameter, EditorRequired] public IReadOnlyList<SessionAnalysis> Sessions { get; set; } = [];
+}

@@ -1,0 +1,241 @@
+@using System.Text.Json
+@inject InsightsService Insights
+@inject ITokenCounter Counter
+
+@{
+    var s = Node.Span;
+}
+<div class="payload">
+    <div class="payload-header">
+        <div>
+            <div class="payload-title">@Title(Node)</div>
+            <div class="muted" style="font-size:.78rem">
+                @Fmt.Time(s.StartTime) · @Fmt.Duration(s.DurationMs) · <span class="mono">@s.Name</span>
+            </div>
+        </div>
+        <a class="btn" href="@Fmt.SpanUrl(s.Id)">Full details →</a>
+    </div>
+
+    @if (Node.Category == SpanCategory.LlmCall)
+    {
+        <div class="payload-stats">
+            <span><strong>@Fmt.Tokens(s.InputTokens)</strong> in@(s.CacheReadTokens > 0 ? $" ({Fmt.Tokens(s.CacheReadTokens)} cached)" : "")</span>
+            <span><strong>@Fmt.Tokens(s.OutputTokens)</strong> out@(s.ReasoningTokens > 0 ? $" ({Fmt.Tokens(s.ReasoningTokens)} reasoning)" : "")</span>
+            @if (s.TimeToFirstTokenMs is { } ttft)
+            {
+                <span>TTFT @Fmt.Duration(ttft)</span>
+            }
+            @if (!string.IsNullOrEmpty(s.FinishReasons))
+            {
+                <span class="badge">@s.FinishReasons</span>
+            }
+            @if (s.StatusCode == 2 || s.ErrorType is not null)
+            {
+                <span class="badge err">@(s.ErrorType ?? s.StatusMessage ?? "error")</span>
+            }
+        </div>
+    }
+    else if (Node.Category == SpanCategory.Tool)
+    {
+        <div class="payload-stats">
+            @if (s.StatusCode == 2 || s.ErrorType is not null)
+            {
+                <span class="badge err">failed@(s.ErrorType is null ? "" : $": {s.ErrorType}")</span>
+            }
+            else
+            {
+                <span class="badge ok">ok</span>
+            }
+            @if (Node.IntroducedTokens is { } introduced)
+            {
+                <span>+@Fmt.Tokens(introduced) tokens to context@(Node.IntroducedIsEstimate ? " (est.)" : "")</span>
+            }
+            @if (!string.IsNullOrEmpty(s.ToolCallId))
+            {
+                <span class="mono">@s.ToolCallId</span>
+            }
+        </div>
+    }
+
+    <div class="tabs">
+        @foreach (var tab in Tabs())
+        {
+            <button class="@(tab.Key == _tab ? "active" : "")" @onclick="() => _tab = tab.Key">@tab.Label</button>
+        }
+    </div>
+
+    <div class="tab-body">
+        @if (_content is null)
+        {
+            <div class="muted">Loading…</div>
+        }
+        else
+        {
+            @switch (_tab)
+            {
+                case "request":
+                    @if (_input is { Count: > 0 })
+                    {
+                        <div class="muted" style="font-size:.75rem;margin-bottom:.4rem">
+                            @_input.Count message@(_input.Count == 1 ? "" : "s") in <span class="mono">gen_ai.input.messages</span>. Some clients (e.g. Copilot CLI) only send the messages added since the previous call.
+                        </div>
+                        <MessageList @key="@($"{s.Id}-in")" Messages="_input" ExpandAll="@(_input.Count <= 3)" MaxChars="8000" />
+                    }
+                    else
+                    {
+                        @Raw(_content.InputMessages, "Prompt content was not captured. Enable content capture in the client (see Setup).")
+                    }
+                    break;
+                case "response":
+                    @if (_output is { Count: > 0 })
+                    {
+                        <MessageList @key="@($"{s.Id}-out")" Messages="_output" ExpandAll="true" MaxChars="8000" />
+                    }
+                    else
+                    {
+                        @Raw(_content.OutputMessages, "Response content was not captured.")
+                    }
+                    @if (!string.IsNullOrWhiteSpace(_content.ReasoningContent))
+                    {
+                        <div class="muted" style="font-size:.75rem;margin-top:.5rem">Reasoning</div>
+                        <pre class="code">@Preview(_content.ReasoningContent)</pre>
+                    }
+                    break;
+                case "system":
+                    <div class="muted" style="font-size:.75rem">≈ @Fmt.Tokens((double)Counter.Count(_content.SystemInstructions)) tokens</div>
+                    <pre class="code tall">@Preview(_content.SystemInstructions, 100_000)</pre>
+                    break;
+                case "tools":
+                    <div class="muted" style="font-size:.75rem">≈ @Fmt.Tokens((double)Counter.Count(_content.ToolDefinitions)) tokens of tool schemas sent with this request</div>
+                    <pre class="code tall">@Preview(JsonPretty.Format(_content.ToolDefinitions), 100_000)</pre>
+                    break;
+                case "args":
+                    <pre class="code">@Preview(JsonPretty.Format(_content.ToolArguments))</pre>
+                    break;
+                case "result":
+                    <div class="muted" style="font-size:.75rem">@(_content.ToolResult is { } r ? $"≈ {Fmt.Tokens((double)Counter.Count(r))} tokens · {r.Length:N0} chars" : "")</div>
+                    <pre class="code tall">@Preview(_content.ToolResult)</pre>
+                    break;
+                case "prompt":
+                    <pre class="code">@Preview(_content.UserRequest ?? s.UserPrompt)</pre>
+                    break;
+                default:
+                    <pre class="code tall">@Preview(JsonPretty.Format(_content.AttributesJson), 100_000)</pre>
+                    @if (!string.IsNullOrEmpty(_content.ResourceJson))
+                    {
+                        <div class="muted" style="font-size:.75rem">Resource</div>
+                        <pre class="code">@JsonPretty.Format(_content.ResourceJson)</pre>
+                    }
+                    break;
+            }
+        }
+    </div>
+</div>
+
+@code {
+    [Parameter, EditorRequired] public SpanNode Node { get; set; } = default!;
+
+    private string? _loadedId;
+    private string _tab = "attributes";
+    private SpanContent? _content;
+    private IReadOnlyList<ChatMessage>? _input;
+    private IReadOnlyList<ChatMessage>? _output;
+    private int? _toolCount;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (_loadedId == Node.Span.Id)
+        {
+            return;
+        }
+
+        _loadedId = Node.Span.Id;
+        _content = null;
+        _tab = Node.Category switch
+        {
+            SpanCategory.LlmCall => "response",
+            SpanCategory.Tool => "result",
+            SpanCategory.Agent => "prompt",
+            _ => "attributes",
+        };
+
+        var content = await Insights.GetContentAsync([Node.Span.Id]);
+        _content = content.GetValueOrDefault(Node.Span.Id) ?? new SpanContent { Id = Node.Span.Id };
+        _input = GenAiMessageParser.TryParse(_content.InputMessages);
+        _output = GenAiMessageParser.TryParse(_content.OutputMessages);
+        _toolCount = CountArray(_content.ToolDefinitions);
+    }
+
+    private IEnumerable<(string Key, string Label)> Tabs()
+    {
+        switch (Node.Category)
+        {
+            case SpanCategory.LlmCall:
+                yield return ("request", _input is null ? "Request" : $"Request · {_input.Count}");
+                yield return ("response", "Response");
+                if (!string.IsNullOrWhiteSpace(_content?.SystemInstructions))
+                {
+                    yield return ("system", "System prompt");
+                }
+
+                if (!string.IsNullOrWhiteSpace(_content?.ToolDefinitions))
+                {
+                    yield return ("tools", _toolCount is { } n ? $"Tool schemas · {n}" : "Tool schemas");
+                }
+
+                break;
+            case SpanCategory.Tool:
+                yield return ("args", "Arguments");
+                yield return ("result", "Result");
+                break;
+            case SpanCategory.Agent:
+                yield return ("prompt", "Prompt");
+                break;
+        }
+
+        yield return ("attributes", "Attributes");
+    }
+
+    public static string Title(SpanNode n) => n.Category switch
+    {
+        SpanCategory.LlmCall => $"🤖 LLM call{(n.CallIndex is { } i ? $" #{i}" : "")} · {n.Span.Model}",
+        SpanCategory.Tool => $"🔧 {n.Span.ToolName ?? n.Span.Name}",
+        SpanCategory.Agent => n.IsPlaceholder ? "🧠 Agent (in progress)" : $"🧠 Agent: {n.Span.AgentName ?? n.Span.Name}",
+        SpanCategory.Hook => $"🪝 Hook: {n.Span.HookType ?? n.Span.Name}",
+        _ => n.Span.Name,
+    };
+
+    private RenderFragment Raw(string? text, string emptyMessage) => __builder =>
+    {
+        if (string.IsNullOrEmpty(text))
+        {
+            <div class="muted">@emptyMessage</div>
+        }
+        else
+        {
+            <div class="callout warn">Could not parse the captured messages (possibly truncated by the exporter). Showing raw content.</div>
+            <pre class="code tall">@Preview(text)</pre>
+        }
+    };
+
+    private static string Preview(string? text, int max = 20_000) =>
+        string.IsNullOrEmpty(text) ? "(not captured)" : text.Length > max ? text[..max] + $"\n… ({text.Length - max:N0} more chars)" : text;
+
+    private static int? CountArray(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json))
+        {
+            return null;
+        }
+
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            return doc.RootElement.ValueKind == JsonValueKind.Array ? doc.RootElement.GetArrayLength() : null;
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+}

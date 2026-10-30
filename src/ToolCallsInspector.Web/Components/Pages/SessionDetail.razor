@@ -1,0 +1,78 @@
+@page "/sessions/{Key}"
+@inherits LiveComponentBase
+@inject InsightsService Insights
+@inject IClientCatalog Clients
+
+<PageTitle>Session · Tool Calls Inspector</PageTitle>
+
+@if (Loading)
+{
+    <div class="muted">Loading…</div>
+}
+else if (_session is null)
+{
+    <div class="panel empty">
+        <h2>Session not found</h2>
+        <p><a href="sessions">Back to sessions</a></p>
+    </div>
+}
+else
+{
+    var t = _session.Totals;
+    var slices = t.Slices();
+    var calls = _session.Traces.SelectMany(tr => tr.LlmCalls).OrderBy(c => c.Span.StartTime).ToList();
+    var number = 0;
+
+    <div class="page-header">
+        <div>
+            <div class="muted" style="font-size:.8rem"><a href="sessions">Sessions</a> / @Clients.GetDisplayName(_session.ClientId)</div>
+            <h1>@Fmt.OneLine(_session.Title, 140)</h1>
+            <div class="subtitle">
+                @Fmt.DateTime(_session.Start) – @Fmt.Time(_session.End) · <span class="mono">@_session.SessionKey</span>
+            </div>
+        </div>
+        @if (LastUpdate is { } updated)
+        {
+            <span class="muted" style="font-size:.8rem"><span class="live-dot"></span>live · updated @Fmt.Time(updated)</span>
+        }
+    </div>
+
+    <div class="grid kpis">
+        <Kpi Label="Total tokens" Value="@Fmt.Tokens(t.Total)" Sub="@($"in {Fmt.Tokens(t.Input)} · out {Fmt.Tokens(t.Output)}")" />
+        <Kpi Label="Cache hit rate" Value="@Fmt.Ratio(t.CacheHitRate)" Sub="@($"{Fmt.Tokens(t.CacheRead)} cached input")" />
+        <Kpi Label="Interactions" Value="@_session.InteractionCount.ToString()" Sub="@($"{_session.Traces.Count(x => x.IsBackground)} background requests")" />
+        <Kpi Label="LLM calls" Value="@t.LlmCalls.ToString()" Sub="@Fmt.Duration(t.LlmDurationMs)" />
+        <Kpi Label="Tool calls" Value="@t.ToolCalls.ToString()" Sub="@Fmt.Duration(t.ToolDurationMs)" />
+        <Kpi Label="Tool results share" Value="@Fmt.Pct(slices.First(s => s.Key == nameof(TokenCategory.ToolResults)).Percent)" Sub="of all tokens" />
+    </div>
+
+    <div class="grid cols-2">
+        <div class="panel">
+            <h2>Token breakdown</h2>
+            <Donut Slices="slices" CenterLabel="session tokens">
+                <BreakdownTable Slices="slices" ToolDetails="@(t.ByTool.Values.Where(x => x.ConsumedInputTokens > 0).ToDictionary(x => x.ToolName, x => x.ConsumedInputTokens))" />
+            </Donut>
+        </div>
+        <div class="panel">
+            <h2>Context growth per LLM call</h2>
+            <div class="muted" style="font-size:.85rem;margin-bottom:.5rem">
+                Every call re-sends the whole conversation. Watch how tool results and history accumulate.
+            </div>
+            <CallColumns Calls="calls" />
+        </div>
+    </div>
+
+    <h2 style="margin-top:1rem">Conversation</h2>
+    @foreach (var trace in _session.Traces)
+    {
+        <InteractionCard @key="trace.TraceId" Trace="trace" Number="@(trace.IsBackground ? null : ++number)" />
+    }
+}
+
+@code {
+    [Parameter] public string Key { get; set; } = string.Empty;
+
+    private SessionAnalysis? _session;
+
+    protected override async Task LoadAsync() => _session = await Insights.GetSessionAsync(Key);
+}

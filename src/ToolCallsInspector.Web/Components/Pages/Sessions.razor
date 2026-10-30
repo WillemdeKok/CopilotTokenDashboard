@@ -1,0 +1,44 @@
+@page "/sessions"
+@inherits LiveComponentBase
+@inject InsightsService Insights
+
+<PageTitle>Sessions · Tool Calls Inspector</PageTitle>
+
+<div class="page-header">
+    <div>
+        <h1>Sessions</h1>
+        <div class="subtitle">Each chat session with its interactions, LLM calls and tool calls.</div>
+    </div>
+    <input class="btn" style="min-width:260px;cursor:text" placeholder="Filter by prompt or client…" @bind="_filter" @bind:event="oninput" />
+</div>
+
+@if (Loading)
+{
+    <div class="muted">Loading…</div>
+}
+else if (_sessions.Count == 0)
+{
+    <div class="panel empty">
+        <h2>No sessions yet</h2>
+        <p>Sessions appear here as soon as Copilot exports telemetry. <a href="setup">Set up a client</a>.</p>
+    </div>
+}
+else
+{
+    <div class="panel">
+        <SessionTable Sessions="Filtered" />
+    </div>
+}
+
+@code {
+    private IReadOnlyList<SessionAnalysis> _sessions = [];
+    private string _filter = string.Empty;
+
+    private IReadOnlyList<SessionAnalysis> Filtered => string.IsNullOrWhiteSpace(_filter)
+        ? _sessions
+        : _sessions.Where(s => s.Title.Contains(_filter, StringComparison.OrdinalIgnoreCase)
+                               || s.ClientId.Contains(_filter, StringComparison.OrdinalIgnoreCase)
+                               || s.Traces.Any(t => t.Prompt?.Contains(_filter, StringComparison.OrdinalIgnoreCase) == true)).ToList();
+
+    protected override async Task LoadAsync() => _sessions = await Insights.GetSessionsAsync();
+}

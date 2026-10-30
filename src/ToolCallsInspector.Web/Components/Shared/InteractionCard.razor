@@ -1,0 +1,63 @@
+@{
+    var t = Trace;
+    var models = t.LlmCalls.Select(c => c.Span.Model).Distinct().ToList();
+}
+<div class="interaction @(t.IsBackground ? "background" : "")" id="trace-@t.TraceId">
+    <div class="interaction-header">
+        <div class="prompt">
+            @if (t.IsBackground)
+            {
+                <span class="badge" style="margin-right:.35rem">background</span>
+            }
+            else if (Number is { } n)
+            {
+                <span class="badge accent" style="margin-right:.35rem">#@n</span>
+            }
+            @if (t.InProgress)
+            {
+                <span class="badge warn" style="margin-right:.35rem">in progress</span>
+            }
+            @Fmt.Truncate(t.DisplayTitle, 600)
+        </div>
+        <div class="meta">
+            <span>🕒 @Fmt.Time(t.Start) · @Fmt.Duration((t.End - t.Start).TotalMilliseconds)</span>
+            <span>🤖 @t.Totals.LlmCalls LLM call@(t.Totals.LlmCalls == 1 ? "" : "s")</span>
+            <span>🔧 @t.Totals.ToolCalls tool call@(t.Totals.ToolCalls == 1 ? "" : "s")</span>
+            <span><strong>@Fmt.Tokens(t.Totals.Total)</strong> tokens (in @Fmt.Tokens(t.Totals.Input) / out @Fmt.Tokens(t.Totals.Output))</span>
+            @if (t.Totals.Input > 0)
+            {
+                <span>cache hit @Fmt.Ratio(t.Totals.CacheHitRate)</span>
+            }
+            @foreach (var m in models)
+            {
+                <span class="badge">@m</span>
+            }
+            <a href="@Fmt.TraceUrl(t.TraceId)" style="margin-left:auto">🧵 View trace →</a>
+        </div>
+        @if (t.Totals.Total > 0)
+        {
+            <div style="margin-top:.5rem"><BreakdownBar Slices="t.Totals.Slices()" Small="true" /></div>
+        }
+    </div>
+    <div class="interaction-body">
+        @foreach (var root in t.Roots.OrderBy(r => r.Span.StartTime))
+        {
+            @if (root.Category == SpanCategory.Agent)
+            {
+                @foreach (var item in root.TimelineItems())
+                {
+                    <SpanItem @key="item.Span.Id" Node="item" />
+                }
+            }
+            else
+            {
+                <SpanItem @key="root.Span.Id" Node="root" />
+            }
+        }
+    </div>
+</div>
+
+@code {
+    [Parameter, EditorRequired] public TraceAnalysis Trace { get; set; } = default!;
+    [Parameter] public int? Number { get; set; }
+}

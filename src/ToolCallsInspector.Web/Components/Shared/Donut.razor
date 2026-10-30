@@ -1,0 +1,36 @@
+@{
+    var total = Slices.Sum(s => s.Value);
+    const double r = 60, c = 2 * Math.PI * r;
+    double offset = 0;
+}
+<div class="donut-wrap">
+    <svg width="170" height="170" viewBox="0 0 170 170" role="img" aria-label="Token breakdown">
+        <circle cx="85" cy="85" r="@r" fill="none" stroke="#f3f4f6" stroke-width="26" />
+        @if (total > 0)
+        {
+            @foreach (var slice in Slices.Where(s => s.Value > 0))
+            {
+                var len = slice.Value / total * c;
+                <circle cx="85" cy="85" r="@r" fill="none" stroke="@Palette.For(slice.Key)" stroke-width="26"
+                        stroke-dasharray="@F(len) @F(c - len)" stroke-dashoffset="@F(-offset)" transform="rotate(-90 85 85)">
+                    <title>@slice.Label: @Fmt.Exact(slice.Value) (@Fmt.Pct(slice.Value / total * 100))</title>
+                </circle>
+                offset += len;
+            }
+        }
+        <text x="85" y="82" text-anchor="middle" font-size="18" font-weight="700">@Fmt.Tokens(total)</text>
+        <text x="85" y="100" text-anchor="middle" font-size="10" fill="#6b7280">@CenterLabel</text>
+    </svg>
+    @if (ChildContent is not null)
+    {
+        <div style="flex:1;min-width:280px">@ChildContent</div>
+    }
+</div>
+
+@code {
+    [Parameter, EditorRequired] public IReadOnlyList<BreakdownSlice> Slices { get; set; } = [];
+    [Parameter] public string CenterLabel { get; set; } = "tokens";
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+
+    private static string F(double v) => v.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture);
+}

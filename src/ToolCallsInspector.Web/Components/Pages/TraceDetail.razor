@@ -1,0 +1,163 @@
+@page "/traces/{TraceId}"
+@inherits LiveComponentBase
+@inject InsightsService Insights
+@inject IClientCatalog Clients
+@inject NavigationManager Nav
+@using ToolCallsInspector.Core.Ingestion
+
+<PageTitle>Trace · Tool Calls Inspector</PageTitle>
+
+@if (Loading)
+{
+    <div class="muted">Loading…</div>
+}
+else if (_trace is null)
+{
+    <div class="panel empty">
+        <h2>Trace not found</h2>
+        <p><a href="traces">Back to traces</a></p>
+    </div>
+}
+else
+{
+    var t = _trace;
+    var rows = Waterfall.Build(t, _collapsed);
+    <div class="page-header">
+        <div>
+            <div class="muted" style="font-size:.8rem">
+                <a href="traces">Traces</a> /
+                <a href="@Fmt.SessionUrl(t.SessionKey)">Session</a>
+            </div>
+            <h1>@Fmt.OneLine(t.DisplayTitle, 110)</h1>
+            <div class="subtitle">
+                @Fmt.DateTime(t.Start) · @Fmt.Duration(Waterfall.TotalMs(t)) · @Clients.GetDisplayName(t.ClientId)
+                · <span class="mono">@t.TraceId</span>
+                @if (t.InProgress) { <span class="badge warn" style="margin-left:.4rem">in progress</span> }
+            </div>
+        </div>
+        <div style="display:flex;gap:.5rem;flex-wrap:wrap;align-items:center">
+            @foreach (var m in t.LlmCalls.Select(c => c.Span.Model).Distinct())
+            {
+                <span class="badge accent">@m</span>
+            }
+        </div>
+    </div>
+
+    <div class="grid kpis">
+        <Kpi Label="Total tokens" Value="@Fmt.Tokens(t.Totals.Total)" Sub="@($"{Fmt.Tokens(t.Totals.Input)} in · {Fmt.Tokens(t.Totals.Output)} out")" />
+        <Kpi Label="Cache hit rate" Value="@Fmt.Ratio(t.Totals.CacheHitRate)" Sub="@($"{Fmt.Tokens(t.Totals.CacheRead)} cached")" />
+        <Kpi Label="LLM calls" Value="@t.Totals.LlmCalls.ToString()" Sub="@Fmt.Duration(t.Totals.LlmDurationMs)" />
+        <Kpi Label="Tool calls" Value="@t.Totals.ToolCalls.ToString()" Sub="@Fmt.Duration(t.Totals.ToolDurationMs)" />
+    </div>
+
+    <div class="trace-layout">
+        <div class="panel waterfall">
+            <div class="wf-row wf-axis">
+                <div class="wf-label muted">Span</div>
+                <div class="wf-track">
+                    @foreach (var (pct, label) in Waterfall.Ticks(t))
+                    {
+                        <span class="wf-tick" style="left:@Css(pct)%">@label</span>
+                    }
+                </div>
+                <div class="wf-meta muted">Tokens</div>
+            </div>
+            @foreach (var row in rows)
+            {
+                var node = row.Node;
+                var selected = node.Span.Id == _selected?.Span.Id;
+                <div class="wf-row clickable @(selected ? "selected" : "")" @onclick="() => Select(node)">
+                    <div class="wf-label" style="padding-left:@(row.Depth * 14)px" title="@node.Span.Name">
+                        @if (row.HasChildren)
+                        {
+                            <span class="wf-caret" @onclick="() => ToggleCollapse(node.Span.Id)" @onclick:stopPropagation="true">@(_collapsed.Contains(node.Span.Id) ? "▸" : "▾")</span>
+                        }
+                        else
+                        {
+                            <span class="wf-caret"></span>
+                        }
+                        <span class="wf-name">@SpanPayload.Title(node)</span>
+                    </div>
+                    <div class="wf-track">
+                        <div class="wf-bar @Waterfall.CssClass(node)" style="left:@Css(row.LeftPercent)%;width:@Css(row.WidthPercent)%"
+                             title="@($"{Fmt.Duration(node.Span.DurationMs)} · starts +{Fmt.Duration((node.Span.StartTime - t.Start).TotalMilliseconds)}")"></div>
+                        <span class="wf-dur" style="left:@Css(Math.Min(row.LeftPercent + row.WidthPercent, 88))%">@Fmt.Duration(node.Span.DurationMs)</span>
+                    </div>
+                    <div class="wf-meta">
+                        @if (node.Category == SpanCategory.LlmCall)
+                        {
+                            <span>@Fmt.Tokens((node.Span.InputTokens ?? 0) + (node.Span.OutputTokens ?? 0))</span>
+                        }
+                        else if (node.Category == SpanCategory.Tool && node.IntroducedTokens is double introduced && introduced > 0)
+                        {
+                            <span class="muted" title="Tokens this result added to the next LLM request@(node.IntroducedIsEstimate ? " (estimate)" : "")">+@Fmt.Tokens(introduced)</span>
+                        }
+                    </div>
+                </div>
+            }
+            <div class="wf-legend muted">
+                <span><i class="dot llm"></i>LLM call</span>
+                <span><i class="dot tool"></i>Tool call</span>
+                <span><i class="dot agent"></i>Agent</span>
+                <span><i class="dot other"></i>Other</span>
+            </div>
+        </div>
+
+        <div class="trace-side">
+            @if (_selected is not null)
+            {
+                <div class="panel">
+                    <SpanPayload @key="_selected.Span.Id" Node="_selected" />
+                </div>
+            }
+            else
+            {
+                <div class="panel muted">Select a span to see its request and response.</div>
+            }
+        </div>
+    </div>
+}
+
+@code {
+    [Parameter] public string TraceId { get; set; } = string.Empty;
+    [SupplyParameterFromQuery(Name = "span")] public string? Span { get; set; }
+
+    private TraceAnalysis? _trace;
+    private SpanNode? _selected;
+    private readonly HashSet<string> _collapsed = [];
+
+    protected override async Task LoadAsync()
+    {
+        _trace = await Insights.GetTraceAsync(TraceId);
+        if (_trace is null)
+        {
+            _selected = null;
+            return;
+        }
+
+        var all = _trace.Roots.SelectMany(r => r.Descendants().Prepend(r)).ToList();
+        var wanted = Span ?? _selected?.Span.Id;
+        _selected = all.FirstOrDefault(n => n.Span.Id == wanted)
+                    ?? _trace.LlmCalls.FirstOrDefault()
+                    ?? all.FirstOrDefault();
+    }
+
+    protected override bool IsRelevant(SpansIngestedEvent e) => e.TraceIds.Contains(TraceId);
+
+    private void Select(SpanNode node)
+    {
+        _selected = node;
+        Nav.NavigateTo(Fmt.TraceUrl(TraceId, node.Span.Id), new NavigationOptions { ReplaceHistoryEntry = true });
+    }
+
+    private void ToggleCollapse(string id)
+    {
+        if (!_collapsed.Remove(id))
+        {
+            _collapsed.Add(id);
+        }
+    }
+
+
+    private static string Css(double value) => value.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture);
+}

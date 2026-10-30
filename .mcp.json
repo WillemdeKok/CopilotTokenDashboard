@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "warm-weather": {
+      "type": "http",
+      "url": "http://localhost:5190/mcp",
+      "tools": ["*"]
+    }
+  }
+}

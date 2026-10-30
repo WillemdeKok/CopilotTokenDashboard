@@ -1,0 +1,88 @@
+@inject ITokenCounter Counter
+
+@for (var i = 0; i < Messages.Count; i++)
+{
+    var m = Messages[i];
+    var index = i;
+    var open = _expanded.Contains(index) != ExpandAll;
+    var preview = m.Parts.FirstOrDefault()?.Content;
+    <div class="message">
+        <div class="message-header" @onclick="() => Toggle(index)">
+            <span>
+                @(open ? "▾" : "▸") @RoleIcon(m.Role) <strong>@(string.IsNullOrEmpty(m.Role) ? "(no role)" : m.Role)</strong>
+                @foreach (var call in m.Parts.Where(p => p.Kind == MessagePartKind.ToolCall))
+                {
+                    <span class="badge" style="margin-left:.35rem">→ @call.ToolName</span>
+                }
+                @foreach (var result in m.Parts.Where(p => p.Kind == MessagePartKind.ToolCallResponse && p.ToolName is not null))
+                {
+                    <span class="badge" style="margin-left:.35rem">← @result.ToolName</span>
+                }
+                @if (!open)
+                {
+                    <span class="muted" style="margin-left:.5rem">@Fmt.OneLine(preview, 120)</span>
+                }
+            </span>
+            <span class="muted nowrap">≈ @Fmt.Tokens((double)Estimate(m)) tokens</span>
+        </div>
+        @if (open)
+        {
+            <div class="message-body">
+                @foreach (var part in m.Parts)
+                {
+                    @switch (part.Kind)
+                    {
+                        case MessagePartKind.ToolCall:
+                            <div class="muted" style="font-size:.75rem;margin-top:.4rem">Tool call <span class="mono">@part.ToolName</span> @(part.ToolCallId is null ? "" : $"({part.ToolCallId})")</div>
+                            <pre class="code">@Preview(JsonPretty.Format(part.Content))</pre>
+                            break;
+                        case MessagePartKind.ToolCallResponse:
+                            <div class="muted" style="font-size:.75rem;margin-top:.4rem">Tool result @(part.ToolName is null ? "" : $"from {part.ToolName}") @(part.ToolCallId is null ? "" : $"({part.ToolCallId})")</div>
+                            <pre class="code">@Preview(part.Content)</pre>
+                            break;
+                        case MessagePartKind.Reasoning:
+                            <div class="muted" style="font-size:.75rem;margin-top:.4rem">Reasoning</div>
+                            <pre class="code">@Preview(part.Content)</pre>
+                            break;
+                        default:
+                            <pre class="code">@Preview(part.Content)</pre>
+                            break;
+                    }
+                }
+            </div>
+        }
+    </div>
+}
+
+@code {
+    [Parameter, EditorRequired] public IReadOnlyList<ChatMessage> Messages { get; set; } = [];
+
+    /// <summary>When true, messages start expanded and clicking collapses them.</summary>
+    [Parameter] public bool ExpandAll { get; set; }
+
+    [Parameter] public int MaxChars { get; set; } = 20_000;
+
+    private readonly HashSet<int> _expanded = [];
+
+    private void Toggle(int index)
+    {
+        if (!_expanded.Remove(index))
+        {
+            _expanded.Add(index);
+        }
+    }
+
+    private string Preview(string? text) =>
+        string.IsNullOrEmpty(text) ? "(empty)" : text.Length > MaxChars ? text[..MaxChars] + $"\n… ({text.Length - MaxChars:N0} more chars)" : text;
+
+    private int Estimate(ChatMessage m) => m.Parts.Sum(p => Counter.Count(p.Content)) + 4;
+
+    private static string RoleIcon(string role) => role switch
+    {
+        "system" => "⚙️",
+        "user" => "👤",
+        "assistant" => "🤖",
+        "tool" => "🔧",
+        _ => "•",
+    };
+}
