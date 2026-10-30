@@ -26,7 +26,7 @@ app.MapGet("/", () => Results.Text(
       GET /api/weather/forecast?start=today&days=7&city=Amsterdam
 
     MCP (for GitHub Copilot)
-      POST /mcp   tools: get_weather_for_date, get_weather_forecast, get_current_date
+      POST /mcp   tools: get_weather_for_date (one date per call), get_current_date
     """));
 
 var api = app.MapGroup("/api/weather");

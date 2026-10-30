@@ -90,7 +90,7 @@ public class WeatherEndpointTests(WebApplicationFactory<Program> factory) : ICla
 
         var tools = await mcp.ListToolsAsync();
         Assert.Equal(
-            ["get_current_date", "get_weather_for_date", "get_weather_forecast"],
+            ["get_current_date", "get_weather_for_date"],
             tools.Select(t => t.Name).Order());
 
         var result = await mcp.CallToolAsync("get_weather_for_date",
@@ -100,12 +100,6 @@ public class WeatherEndpointTests(WebApplicationFactory<Program> factory) : ICla
         Assert.Contains("°C", text);
         var report = JsonSerializer.Deserialize<WeatherReport>(text, JsonSerializerOptions.Web)!;
         Assert.Equal("Barcelona", report.City);
-
-        var forecast = await mcp.CallToolAsync("get_weather_forecast",
-            new Dictionary<string, object?> { ["startDate"] = "2026-08-01", ["days"] = 3 });
-        var days = JsonSerializer.Deserialize<WeatherReport[]>(
-            Assert.IsType<TextContentBlock>(Assert.Single(forecast.Content)).Text, JsonSerializerOptions.Web)!;
-        Assert.Equal(["2026-08-01", "2026-08-02", "2026-08-03"], days.Select(d => d.Date));
 
         var invalid = await mcp.CallToolAsync("get_weather_for_date",
             new Dictionary<string, object?> { ["date"] = "someday" });

@@ -114,18 +114,17 @@ The CLI captures only the messages that are **new** since the previous LLM call.
 
 | Tool | Purpose |
 | --- | --- |
-| `get_weather_for_date(date, city?, includeHourly?)` | Weather for one date (`yyyy-MM-dd`, `today`, `tomorrow`, `yesterday`). `includeHourly` adds 24 hourly entries, which makes a much bigger tool result. |
-| `get_weather_forecast(startDate, days?, city?)` | Daily forecast for 1–14 days. |
+| `get_weather_for_date(date, city?, includeHourly?)` | Weather for one single date (`yyyy-MM-dd`, `today`, `tomorrow`, `yesterday`). Date ranges aren't supported, so multi-day questions take one call per date. `includeHourly` adds 24 hourly entries, which makes a much bigger tool result. |
 | `get_current_date()` | Today's date, for resolving "next Friday" and similar. |
 
-REST equivalents: `GET http://localhost:5190/api/weather/2026-08-01?city=Barcelona&hourly=true` and `GET http://localhost:5190/api/weather/forecast?start=today&days=7`.
+REST equivalents: `GET http://localhost:5190/api/weather/2026-08-01?city=Barcelona&hourly=true`. The REST API also has `GET http://localhost:5190/api/weather/forecast?start=today&days=7`, which is deliberately not exposed as a tool.
 
 1. Start the inspector and the weather API: `dotnet run --project src/ToolCallsInspector.AppHost`. Or start them separately with `dotnet run --project src/ToolCallsInspector.Web` and `dotnet run --project samples/WeatherApi` (it listens on <http://localhost:5190>).
 2. Register the MCP server. Both configs are already in this repo:
    - **Copilot CLI / Copilot app**: `.mcp.json` (workspace config). Check with `copilot mcp list`. To make it available everywhere, run `copilot mcp add --transport http warm-weather http://localhost:5190/mcp`.
    - **VS Code**: `.vscode/mcp.json`. Open the folder in VS Code and start the `warm-weather` server from the MCP view.
 3. Make sure the client exports OTel to the inspector (see the sections above).
-4. Ask Copilot, for example: *"What will the weather be like in Amsterdam on 2026-08-01?"*, or *"Give me an hourly forecast for Barcelona tomorrow"* (a large tool result), or *"Compare the next 14 days in Rome and Oslo"* (several tool calls).
+4. Ask Copilot, for example: *"What will the weather be like in Amsterdam on 2026-08-01?"*, or *"Give me an hourly forecast for Barcelona tomorrow"* (a large tool result), or *"Compare this weekend in Rome and Oslo"* (several tool calls, one per city and date).
 5. Open <http://localhost:5180>. The session shows the prompt, each LLM call, and the `warm-weather-get_weather_for_date` tool call with its arguments and result. You can see how many tokens the result added and what it cost on later calls.
 
 One-shot check from a terminal, without changing your environment permanently:
