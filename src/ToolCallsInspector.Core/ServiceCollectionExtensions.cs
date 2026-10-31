@@ -6,13 +6,17 @@ using ToolCallsInspector.Core.Ingestion;
 using ToolCallsInspector.Core.Normalization;
 using ToolCallsInspector.Core.Storage;
 using ToolCallsInspector.Core.Telemetry;
+using ToolCallsInspector.Core.Transcripts;
 
 namespace ToolCallsInspector.Core;
 
 public static class ServiceCollectionExtensions
 {
     /// <summary>Registers storage, normalization, ingestion and analysis. Client profiles for VS Code and Copilot CLI are included.</summary>
-    public static IServiceCollection AddToolCallsInspectorCore(this IServiceCollection services, string databasePath)
+    /// <param name="copilotSessionStatePath">
+    /// Copilot session-state folder used to rebuild full prompts; null uses the default (<c>~/.copilot/session-state</c>), empty disables it.
+    /// </param>
+    public static IServiceCollection AddToolCallsInspectorCore(this IServiceCollection services, string databasePath, string? copilotSessionStatePath = null)
     {
         var directory = Path.GetDirectoryName(Path.GetFullPath(databasePath));
         if (!string.IsNullOrEmpty(directory))
@@ -35,6 +39,10 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<ITokenCounter, TiktokenTokenCounter>();
         services.AddSingleton<TokenAttributionEngine>();
         services.AddSingleton<TraceAnalyzer>();
+        var transcripts = new CopilotSessionTranscriptSource(copilotSessionStatePath ?? CopilotSessionTranscriptSource.DefaultRoot());
+        services.AddSingleton(transcripts);
+        services.AddSingleton<ITranscriptSource>(transcripts);
+        services.AddSingleton<TranscriptEnricher>();
         services.AddSingleton<InsightsService>();
         return services;
     }

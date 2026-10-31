@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using ToolCallsInspector.Core.Ingestion;
 using ToolCallsInspector.Core.Storage;
+using ToolCallsInspector.Core.Transcripts;
 
 namespace ToolCallsInspector.Core.Analysis;
 
@@ -20,15 +21,17 @@ public sealed class InsightsService : IDisposable
     private readonly ISpanStore _store;
     private readonly TraceAnalyzer _analyzer;
     private readonly InspectorEvents _events;
+    private readonly TranscriptEnricher? _transcripts;
     private readonly ConcurrentDictionary<string, TraceAnalysis> _cache = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, long> _versions = new(StringComparer.Ordinal);
     private long _clearGeneration;
 
-    public InsightsService(ISpanStore store, TraceAnalyzer analyzer, InspectorEvents events)
+    public InsightsService(ISpanStore store, TraceAnalyzer analyzer, InspectorEvents events, TranscriptEnricher? transcripts = null)
     {
         _store = store;
         _analyzer = analyzer;
         _events = events;
+        _transcripts = transcripts;
         _events.SpansIngested += OnIngested;
         _events.DataCleared += OnCleared;
     }
@@ -95,8 +98,11 @@ public sealed class InsightsService : IDisposable
         return trace is null || node is null ? null : (trace, node);
     }
 
-    public Task<IReadOnlyDictionary<string, SpanContent>> GetContentAsync(IEnumerable<string> spanRecordIds, CancellationToken cancellationToken = default) =>
-        _store.GetContentAsync(spanRecordIds, cancellationToken);
+    public async Task<IReadOnlyDictionary<string, SpanContent>> GetContentAsync(IEnumerable<string> spanRecordIds, CancellationToken cancellationToken = default) =>
+        Enrich(await _store.GetContentAsync(spanRecordIds, cancellationToken));
+
+    private IReadOnlyDictionary<string, SpanContent> Enrich(IReadOnlyDictionary<string, SpanContent> content) =>
+        _transcripts?.Enrich(content) ?? content;
 
     private async Task<IReadOnlyList<TraceAnalysis>> GetTraceAnalysesAsync(IReadOnlyList<SpanRecord> metadata, CancellationToken cancellationToken)
     {
@@ -122,7 +128,7 @@ public sealed class InsightsService : IDisposable
             var contentIds = chunk.SelectMany(t => t)
                 .Where(s => s.Category is SpanCategory.LlmCall or SpanCategory.Tool)
                 .Select(s => s.Id);
-            var content = await _store.GetContentAsync(contentIds, cancellationToken);
+            var content = Enrich(await _store.GetContentAsync(contentIds, cancellationToken));
 
             foreach (var trace in chunk)
             {

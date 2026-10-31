@@ -1,0 +1,52 @@
+@* Code/text block: JSON is pretty-printed and syntax highlighted, anything else is shown as plain text. *@
+<pre class="code @Class">@_html</pre>
+
+@code {
+    [Parameter] public string? Text { get; set; }
+    [Parameter] public string? Class { get; set; }
+
+    /// <summary>Characters shown before truncating (after pretty-printing).</summary>
+    [Parameter] public int Max { get; set; } = 20_000;
+
+    /// <summary>Re-indent JSON. Off when the exact layout matters.</summary>
+    [Parameter] public bool Format { get; set; } = true;
+
+    [Parameter] public string Empty { get; set; } = "(not captured)";
+
+    private string? _renderedText;
+    private int _renderedMax;
+    private bool _renderedFormat;
+    private MarkupString _html;
+
+    protected override void OnParametersSet()
+    {
+        if (_html.Value is not null && _renderedText == Text && _renderedMax == Max && _renderedFormat == Format)
+        {
+            return;
+        }
+
+        _renderedText = Text;
+        _renderedMax = Max;
+        _renderedFormat = Format;
+        _html = Render(Text, Max, Format, Empty);
+    }
+
+    public static MarkupString Render(string? text, int max = 20_000, bool format = true, string empty = "(not captured)")
+    {
+        if (string.IsNullOrEmpty(text))
+        {
+            return new MarkupString(System.Net.WebUtility.HtmlEncode(empty));
+        }
+
+        var json = JsonHighlighter.LooksLikeJson(text);
+        if (json && format)
+        {
+            text = JsonPretty.Format(text)!;
+        }
+
+        var more = text.Length > max ? text.Length - max : 0;
+        var shown = more > 0 ? text[..max] : text;
+        var html = json ? JsonHighlighter.ToHtml(shown) : System.Net.WebUtility.HtmlEncode(shown);
+        return new MarkupString(more > 0 ? html + $"\n<span class=\"j-more\">… ({more:N0} more chars)</span>" : html);
+    }
+}

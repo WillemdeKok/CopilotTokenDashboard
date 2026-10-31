@@ -1,0 +1,10 @@
+<div class="callout warn" style="margin-bottom:.5rem">
+    ≈ <strong>@Fmt.Tokens(Missing)</strong> of this request's @Fmt.Tokens(InputTokens) input tokens (@($"{Missing / InputTokens:P0}")) aren't in the exported messages.
+    The model received them, but the client didn't export them. The Copilot CLI only exports messages added during the current turn, so earlier turns (your previous prompts, Copilot's replies and their tool results) are missing here.
+    Full prompts are rebuilt automatically when the Copilot session log (<span class="mono">~/.copilot/session-state/&lt;session&gt;/events.jsonl</span>) is available on this machine.
+</div>
+
+@code {
+    [Parameter, EditorRequired] public double Missing { get; set; }
+    [Parameter, EditorRequired] public double InputTokens { get; set; }
+}

@@ -1,0 +1,14 @@
+@* Shows/hides the Copilot CLI's diagnostic timing spans everywhere. Renders nothing when there are none. *@
+@inject ViewPreferences Prefs
+@if (Count > 0)
+{
+    <label class="muted" style="font-size:.8rem;font-weight:400;display:inline-flex;gap:.3rem;align-items:center;cursor:pointer"
+           title="Diagnostic session.timing.* spans emitted by the Copilot CLI (request preparation, HTTP timings, startup, …)">
+        <input type="checkbox" checked="@Prefs.ShowTimings" @onchange="e => Prefs.ShowTimings = e.Value is true" />
+        ⏱ timing spans (@Count)
+    </label>
+}
+
+@code {
+    [Parameter, EditorRequired] public int Count { get; set; }
+}

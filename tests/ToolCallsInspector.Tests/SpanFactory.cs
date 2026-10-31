@@ -4,6 +4,7 @@ using ToolCallsInspector.Core.Clients;
 using ToolCallsInspector.Core.Normalization;
 using ToolCallsInspector.Core.Storage;
 using ToolCallsInspector.Core.Telemetry;
+using ToolCallsInspector.Core.Transcripts;
 
 namespace ToolCallsInspector.Tests;
 
@@ -35,13 +36,14 @@ internal sealed class SpanFactory
 
     public string Chat(double start, double end, long input, long output, string? parent, string? inputMessages = null,
         string? system = null, string? userRequest = null, long reasoning = 0, string? session = null, string? parentSession = null,
-        string? outputMessages = null)
+        string? outputMessages = null, string? toolDefinitions = null, string? conversationId = null, string? responseId = null)
     {
         var attrs = new Dictionary<string, object?>
         {
             [GenAiKeys.OperationName] = "chat",
             [GenAiKeys.RequestModel] = "gpt-test",
-            [GenAiKeys.ConversationId] = Guid.NewGuid().ToString(),
+            [GenAiKeys.ConversationId] = conversationId ?? Guid.NewGuid().ToString(),
+            [GenAiKeys.ResponseId] = responseId,
             [GenAiKeys.InputTokens] = input,
             [GenAiKeys.OutputTokens] = output,
             [GenAiKeys.ReasoningTokens] = reasoning,
@@ -50,6 +52,7 @@ internal sealed class SpanFactory
             [GenAiKeys.OutputMessages] = outputMessages,
             [GenAiKeys.SystemInstructions] = system,
             [GenAiKeys.UserRequest] = userRequest,
+            [GenAiKeys.ToolDefinitions] = toolDefinitions,
         };
         if (parentSession is not null) attrs[GenAiKeys.ParentChatSessionId] = parentSession;
         return Add("chat gpt-test", parent, start, end, attrs);
@@ -89,13 +92,14 @@ internal sealed class SpanFactory
         return spanId;
     }
 
-    public TraceAnalysis Analyze() => Analyze(_spans).Single();
+    public TraceAnalysis Analyze(TranscriptEnricher? enricher = null) => Analyze(_spans, enricher).Single();
 
-    public static IReadOnlyList<TraceAnalysis> Analyze(IEnumerable<RawSpan> spans)
+    public static IReadOnlyList<TraceAnalysis> Analyze(IEnumerable<RawSpan> spans, TranscriptEnricher? enricher = null)
     {
         var normalizer = new SpanNormalizer(new ClientCatalog([new VsCodeCopilotChatProfile(), new CopilotCliProfile()]));
         var normalized = spans.Select(s => normalizer.Normalize(s, "test")).ToList();
-        var content = normalized.ToDictionary(n => n.Record.Id, n => n.Content);
+        IReadOnlyDictionary<string, SpanContent> content = normalized.ToDictionary(n => n.Record.Id, n => n.Content);
+        content = enricher?.Enrich(content) ?? content;
         var analyzer = new TraceAnalyzer(new TokenAttributionEngine(new TiktokenTokenCounter()));
         return normalized.Select(n => n.Record).GroupBy(r => r.TraceId)
             .Select(g => analyzer.Analyze(g.Key, g.ToList(), content, TraceAnalyzer.ResolveSessionKey(g.Key, g)))

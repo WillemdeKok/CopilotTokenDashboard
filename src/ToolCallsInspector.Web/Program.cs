@@ -19,9 +19,10 @@ builder.WebHost.ConfigureKestrel(options =>
     options.Limits.MaxRequestBodySize = 256L * 1024 * 1024;
 });
 
-builder.Services.AddToolCallsInspectorCore(databasePath);
+builder.Services.AddToolCallsInspectorCore(databasePath, builder.Configuration["Inspector:CopilotSessionStatePath"]);
 builder.Services.AddSingleton(new InspectorOptions(databasePath));
 builder.Services.AddSingleton<DemoDataService>();
+builder.Services.AddSingleton<ViewPreferences>();
 builder.Services.AddHostedService<TelemetrySourceHost>();
 
 builder.Services.AddRazorComponents()

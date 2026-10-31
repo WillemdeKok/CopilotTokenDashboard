@@ -1,3 +1,4 @@
+@inject ViewPreferences Prefs
 @{
     var t = Trace;
     var models = t.LlmCalls.Select(c => c.Span.Model).Distinct().ToList();
@@ -40,11 +41,11 @@
         }
     </div>
     <div class="interaction-body">
-        @foreach (var root in t.Roots.OrderBy(r => r.Span.StartTime))
+        @foreach (var root in Prefs.Visible(t.Roots).OrderBy(r => r.Span.StartTime))
         {
             @if (root.Category == SpanCategory.Agent)
             {
-                @foreach (var item in root.TimelineItems())
+                @foreach (var item in Prefs.Visible(root.TimelineItems()))
                 {
                     <SpanItem @key="item.Span.Id" Node="item" />
                 }

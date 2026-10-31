@@ -21,7 +21,7 @@ else if (_trace is null)
 else
 {
     var t = _trace;
-    var rows = Waterfall.Build(t, _collapsed);
+    var rows = Waterfall.Build(t, _collapsed, hideTimings: !Prefs.ShowTimings);
     <div class="page-header">
         <div>
             <div class="muted" style="font-size:.8rem">
@@ -36,6 +36,7 @@ else
             </div>
         </div>
         <div style="display:flex;gap:.5rem;flex-wrap:wrap;align-items:center">
+            <TimingToggle Count="@ViewPreferences.CountTimings(t.Roots)" />
             @foreach (var m in t.LlmCalls.Select(c => c.Span.Model).Distinct())
             {
                 <span class="badge accent">@m</span>

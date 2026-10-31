@@ -1,0 +1,120 @@
+@inject InsightsService Insights
+@inject ITokenCounter Counter
+@inject IJSRuntime JS
+
+@if (Span.Category == SpanCategory.LlmCall && Span.HasContent)
+{
+    <button class="btn" title="Everything sent to the model with this call, as one JSON document" @onclick="OpenAsync">📤 Full request</button>
+
+    @if (_open)
+    {
+        <Overlay Title="@($"Full request · LLM call · {Span.Model}")" OnClose="() => _open = false">
+            <Subtitle>
+                <div class="muted" style="font-size:.75rem">
+                    @if (_request is null)
+                    {
+                        <span>Loading…</span>
+                    }
+                    else
+                    {
+                        <span>@(_request.HasFullHistory ? "📜 Full prompt" : "⚠ Partial prompt") · @_request.Json.Length.ToString("N0") chars · input billed: @Fmt.Tokens(Span.InputTokens)</span>
+                        <br />
+                        <span>Reconstructed from telemetry and the session log in a provider-neutral shape; the exact wire format (and encrypted reasoning) is not available.</span>
+                    }
+                </div>
+            </Subtitle>
+            <Actions>
+                @if (_request is not null)
+                {
+                    <button class="btn" @onclick="() => CopyAsync(null)">@(_copied == "all" ? "Copied ✓" : "Copy JSON")</button>
+                }
+            </Actions>
+            <ChildContent>
+                @if (_request is null)
+                {
+                    <div class="muted">Loading…</div>
+                }
+                else
+                {
+                    <CodeBlock Text="@Header()" Format="false" />
+                    @foreach (var section in _request.Sections)
+                    {
+                        var expanded = _expanded.Contains(section.Key);
+                        <div class="log-line">
+                            <div class="log-line-header">
+                                <button class="btn-link" style="font-size:.85rem;font-weight:600" @onclick="() => Toggle(section.Key)">
+                                    @(expanded ? "▾" : "▸") @section.Label
+                                </button>
+                                <span>
+                                    <span class="muted" title="Counted locally with the o200k tokenizer over the captured JSON text; the model's tokenizer may differ">
+                                        @section.Chars.ToString("N0") chars · ≈ @Fmt.Tokens(section.Tokens) tokens
+                                    </span>
+                                    · <button class="btn-link" @onclick="() => CopyAsync(section)">@(_copied == section.Key ? "Copied ✓" : "Copy")</button>
+                                </span>
+                            </div>
+                            @if (section.Note is not null)
+                            {
+                                <div class="muted" style="font-size:.75rem">@section.Note</div>
+                            }
+                            @if (expanded)
+                            {
+                                <CodeBlock Text="@section.Json" Format="false" Max="1_000_000" />
+                            }
+                        </div>
+                    }
+                }
+            </ChildContent>
+        </Overlay>
+    }
+}
+
+@code {
+    [Parameter, EditorRequired] public SpanRecord Span { get; set; } = default!;
+
+    private bool _open;
+    private string? _copied;
+    private FullRequest? _request;
+    private string? _requestSpanId;
+    private readonly HashSet<string> _expanded = ["messages"];
+
+    private async Task OpenAsync()
+    {
+        _open = true;
+        _copied = null;
+        StateHasChanged();
+
+        if (_request is null || _requestSpanId != Span.Id)
+        {
+            _request = null;
+            _requestSpanId = Span.Id;
+            var content = await Insights.GetContentAsync([Span.Id]);
+            var item = content.GetValueOrDefault(Span.Id) ?? new SpanContent { Id = Span.Id };
+            _request = await Task.Run(() => FullRequestBuilder.Build(Span, item, Counter));
+        }
+    }
+
+    private string Header()
+    {
+        var header = new System.Text.Json.Nodes.JsonObject { ["model"] = Span.RequestModel ?? Span.Model };
+        if (Span.MaxOutputTokens is { } max)
+        {
+            header["max_tokens"] = max;
+        }
+
+        return header.ToJsonString(new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
+    }
+
+    private void Toggle(string key)
+    {
+        if (!_expanded.Remove(key))
+        {
+            _expanded.Add(key);
+        }
+    }
+
+    private async Task CopyAsync(RequestSection? section)
+    {
+        await JS.InvokeVoidAsync("navigator.clipboard.writeText", section?.Json ?? _request!.Json);
+        _copied = section?.Key ?? "all";
+    }
+}

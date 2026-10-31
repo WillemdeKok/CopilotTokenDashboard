@@ -10,6 +10,8 @@ public abstract class LiveComponentBase : ComponentBase, IDisposable
 
     [Inject] protected InspectorEvents Events { get; set; } = default!;
 
+    [Inject] protected ViewPreferences Prefs { get; set; } = default!;
+
     protected bool Loading { get; private set; } = true;
 
     protected DateTimeOffset? LastUpdate { get; private set; }
@@ -22,8 +24,11 @@ public abstract class LiveComponentBase : ComponentBase, IDisposable
     {
         Events.SpansIngested += OnSpansIngested;
         Events.DataCleared += OnCleared;
+        Prefs.Changed += OnPrefsChanged;
         await ReloadAsync();
     }
+
+    private void OnPrefsChanged() => _ = InvokeAsync(StateHasChanged);
 
     protected override async Task OnParametersSetAsync()
     {
@@ -78,6 +83,7 @@ public abstract class LiveComponentBase : ComponentBase, IDisposable
     {
         Events.SpansIngested -= OnSpansIngested;
         Events.DataCleared -= OnCleared;
+        Prefs.Changed -= OnPrefsChanged;
         _debounce?.Cancel();
         GC.SuppressFinalize(this);
     }

@@ -13,7 +13,11 @@
                 @Fmt.Time(s.StartTime) · @Fmt.Duration(s.DurationMs) · <span class="mono">@s.Name</span>
             </div>
         </div>
-        <a class="btn" href="@Fmt.SpanUrl(s.Id)">Full details →</a>
+        <div style="display:flex;gap:.4rem">
+            <FullRequestButton Span="s" />
+            <RawLogButton Span="s" />
+            <a class="btn" href="@Fmt.SpanUrl(s.Id)">Full details →</a>
+        </div>
     </div>
 
     @if (Node.Category == SpanCategory.LlmCall)
@@ -76,9 +80,11 @@
                 case "request":
                     @if (_input is { Count: > 0 })
                     {
-                        <div class="muted" style="font-size:.75rem;margin-bottom:.4rem">
-                            @_input.Count message@(_input.Count == 1 ? "" : "s") in <span class="mono">gen_ai.input.messages</span>. Some clients (e.g. Copilot CLI) only send the messages added since the previous call.
-                        </div>
+                        @if (Node.Composition?.SignificantNotCaptured(s.InputTokens ?? 0) is { } missing)
+                        {
+                            <NotCapturedNotice Missing="missing" InputTokens="s.InputTokens ?? 0" />
+                        }
+                        <PromptSourceNote Content="_content" MessageCount="_input.Count" Composition="Node.Composition" />
                         <MessageList @key="@($"{s.Id}-in")" Messages="_input" ExpandAll="@(_input.Count <= 3)" MaxChars="8000" />
                     }
                     else
@@ -98,33 +104,33 @@
                     @if (!string.IsNullOrWhiteSpace(_content.ReasoningContent))
                     {
                         <div class="muted" style="font-size:.75rem;margin-top:.5rem">Reasoning</div>
-                        <pre class="code">@Preview(_content.ReasoningContent)</pre>
+                        <CodeBlock Text="@_content.ReasoningContent" />
                     }
                     break;
                 case "system":
                     <div class="muted" style="font-size:.75rem">≈ @Fmt.Tokens((double)Counter.Count(_content.SystemInstructions)) tokens</div>
-                    <pre class="code tall">@Preview(_content.SystemInstructions, 100_000)</pre>
+                    <CodeBlock Text="@_content.SystemInstructions" Max="100_000" Class="tall" />
                     break;
                 case "tools":
                     <div class="muted" style="font-size:.75rem">≈ @Fmt.Tokens((double)Counter.Count(_content.ToolDefinitions)) tokens of tool schemas sent with this request</div>
-                    <pre class="code tall">@Preview(JsonPretty.Format(_content.ToolDefinitions), 100_000)</pre>
+                    <CodeBlock Text="@_content.ToolDefinitions" Max="100_000" Class="tall" />
                     break;
                 case "args":
-                    <pre class="code">@Preview(JsonPretty.Format(_content.ToolArguments))</pre>
+                    <CodeBlock Text="@_content.ToolArguments" />
                     break;
                 case "result":
                     <div class="muted" style="font-size:.75rem">@(_content.ToolResult is { } r ? $"≈ {Fmt.Tokens((double)Counter.Count(r))} tokens · {r.Length:N0} chars" : "")</div>
-                    <pre class="code tall">@Preview(_content.ToolResult)</pre>
+                    <CodeBlock Text="@_content.ToolResult" Class="tall" />
                     break;
                 case "prompt":
-                    <pre class="code">@Preview(_content.UserRequest ?? s.UserPrompt)</pre>
+                    <CodeBlock Text="@(_content.UserRequest ?? s.UserPrompt)" />
                     break;
                 default:
-                    <pre class="code tall">@Preview(JsonPretty.Format(_content.AttributesJson), 100_000)</pre>
+                    <CodeBlock Text="@_content.AttributesJson" Max="100_000" Class="tall" />
                     @if (!string.IsNullOrEmpty(_content.ResourceJson))
                     {
                         <div class="muted" style="font-size:.75rem">Resource</div>
-                        <pre class="code">@JsonPretty.Format(_content.ResourceJson)</pre>
+                        <CodeBlock Text="@_content.ResourceJson" />
                     }
                     break;
             }
@@ -214,12 +220,9 @@
         else
         {
             <div class="callout warn">Could not parse the captured messages (possibly truncated by the exporter). Showing raw content.</div>
-            <pre class="code tall">@Preview(text)</pre>
+            <CodeBlock Text="@text" Class="tall" />
         }
     };
-
-    private static string Preview(string? text, int max = 20_000) =>
-        string.IsNullOrEmpty(text) ? "(not captured)" : text.Length > max ? text[..max] + $"\n… ({text.Length - max:N0} more chars)" : text;
 
     private static int? CountArray(string? json)
     {

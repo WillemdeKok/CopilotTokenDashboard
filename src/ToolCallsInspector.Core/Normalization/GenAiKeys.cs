@@ -8,6 +8,7 @@ public static class GenAiKeys
     public const string ConversationId = "gen_ai.conversation.id";
     public const string RequestModel = "gen_ai.request.model";
     public const string ResponseModel = "gen_ai.response.model";
+    public const string ResponseId = "gen_ai.response.id";
     public const string RequestMaxTokens = "gen_ai.request.max_tokens";
     public const string FinishReasons = "gen_ai.response.finish_reasons";
     public const string InputTokens = "gen_ai.usage.input_tokens";

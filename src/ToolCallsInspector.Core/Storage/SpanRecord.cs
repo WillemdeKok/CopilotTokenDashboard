@@ -86,4 +86,10 @@ public sealed class SpanContent
     public string? AttributesJson { get; set; }
     public string? ResourceJson { get; set; }
     public string? EventsJson { get; set; }
+
+    /// <summary>Not stored. Set when <see cref="InputMessages"/> holds the full prompt rebuilt from this local session log.</summary>
+    public string? TranscriptPath { get; set; }
+
+    /// <summary>Not stored. The (partial) input messages the telemetry carried, when replaced from a transcript.</summary>
+    public string? TelemetryInputMessages { get; set; }
 }

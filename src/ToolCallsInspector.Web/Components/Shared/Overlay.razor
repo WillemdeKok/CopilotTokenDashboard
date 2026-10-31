@@ -1,0 +1,41 @@
+@* Modal dialog: closes on ✕, Escape, or a click on the backdrop. *@
+<div class="overlay" @onclick="CloseAsync">
+    <div class="overlay-dialog" role="dialog" aria-modal="true" tabindex="-1" @ref="_dialog"
+         @onclick:stopPropagation="true" @onkeydown="OnKeyDown">
+        <div class="overlay-header">
+            <div style="min-width:0">
+                <div class="payload-title">@Title</div>
+                @Subtitle
+            </div>
+            <div style="display:flex;gap:.4rem;align-items:center;flex:none">
+                @Actions
+                <button class="btn" @onclick="CloseAsync" title="Close (Esc)">✕</button>
+            </div>
+        </div>
+        <div class="overlay-body">
+            @ChildContent
+        </div>
+    </div>
+</div>
+
+@code {
+    [Parameter, EditorRequired] public string Title { get; set; } = "";
+    [Parameter] public RenderFragment? Subtitle { get; set; }
+    [Parameter] public RenderFragment? Actions { get; set; }
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+    [Parameter] public EventCallback OnClose { get; set; }
+
+    private ElementReference _dialog;
+
+    private Task CloseAsync() => OnClose.InvokeAsync();
+
+    private Task OnKeyDown(KeyboardEventArgs e) => e.Key == "Escape" ? CloseAsync() : Task.CompletedTask;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            await _dialog.FocusAsync();
+        }
+    }
+}

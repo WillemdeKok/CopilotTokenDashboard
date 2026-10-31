@@ -34,18 +34,18 @@
                     {
                         case MessagePartKind.ToolCall:
                             <div class="muted" style="font-size:.75rem;margin-top:.4rem">Tool call <span class="mono">@part.ToolName</span> @(part.ToolCallId is null ? "" : $"({part.ToolCallId})")</div>
-                            <pre class="code">@Preview(JsonPretty.Format(part.Content))</pre>
+                            <CodeBlock Text="@part.Content" Max="MaxChars" Empty="(empty)" />
                             break;
                         case MessagePartKind.ToolCallResponse:
                             <div class="muted" style="font-size:.75rem;margin-top:.4rem">Tool result @(part.ToolName is null ? "" : $"from {part.ToolName}") @(part.ToolCallId is null ? "" : $"({part.ToolCallId})")</div>
-                            <pre class="code">@Preview(part.Content)</pre>
+                            <CodeBlock Text="@part.Content" Max="MaxChars" Empty="(empty)" />
                             break;
                         case MessagePartKind.Reasoning:
                             <div class="muted" style="font-size:.75rem;margin-top:.4rem">Reasoning</div>
-                            <pre class="code">@Preview(part.Content)</pre>
+                            <CodeBlock Text="@part.Content" Max="MaxChars" Empty="(empty)" />
                             break;
                         default:
-                            <pre class="code">@Preview(part.Content)</pre>
+                            <CodeBlock Text="@part.Content" Max="MaxChars" Empty="(empty)" />
                             break;
                     }
                 }
@@ -71,9 +71,6 @@
             _expanded.Add(index);
         }
     }
-
-    private string Preview(string? text) =>
-        string.IsNullOrEmpty(text) ? "(empty)" : text.Length > MaxChars ? text[..MaxChars] + $"\n… ({text.Length - MaxChars:N0} more chars)" : text;
 
     private int Estimate(ChatMessage m) => m.Parts.Sum(p => Counter.Count(p.Content)) + 4;
 

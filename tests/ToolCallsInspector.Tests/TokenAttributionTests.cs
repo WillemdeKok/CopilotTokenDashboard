@@ -37,6 +37,26 @@ public class TokenAttributionTests
     }
 
     [Fact]
+    public void Tool_definitions_are_attributed_to_tool_schemas_not_the_uncaptured_remainder()
+    {
+        var f = new SpanFactory();
+        var agent = f.Agent(0, 10);
+        var user = Words(100, "user");
+        var schemas = Words(2000, "schema");
+        f.Chat(1, 2, input: 10_000, output: 10, agent,
+            inputMessages: Messages(Msg("user", Text(user))), toolDefinitions: schemas);
+
+        var comp = f.Analyze().LlmCalls.Single().Composition!;
+
+        Assert.Equal(AttributionMethod.Content, comp.Method);
+        Assert.True(comp.Get(TokenCategory.ToolSchemas) > 1500);
+        Assert.True(comp.Get(TokenCategory.Overhead) > 5000, "history the client did not export stays in the remainder");
+        Assert.Equal(10_000, comp.Total, 3);
+        Assert.Equal(comp.Get(TokenCategory.Overhead), comp.SignificantNotCaptured(10_000));
+        Assert.Null(comp.SignificantNotCaptured(1_000_000));
+    }
+
+    [Fact]
     public void Content_mode_scales_down_when_estimate_exceeds_reported()
     {
         var f = new SpanFactory();

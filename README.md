@@ -138,7 +138,7 @@ copilot -p "What will the weather be like in Amsterdam on 2026-08-01?" --additio
 
 - **Dashboard**
   - Total tokens, input (fresh vs. cached), output/reasoning and cache hit rate.
-  - A "Where did the tokens go?" donut covering LLM output, system prompt, user prompt & context, assistant history, tool results (per tool) and tool schemas & other context.
+  - A "Where did the tokens go?" donut covering LLM output, system prompt, user prompt & context, assistant history, tool results (per tool), tool schemas, and input the client did not capture.
   - Tables by model, by tool and by client, plus recent sessions.
 - **Session**
   - Every interaction (agent run) and background request, in order.
@@ -165,20 +165,31 @@ copilot -p "What will the weather be like in Amsterdam on 2026-08-01?" --additio
 Each `chat` span reports exact `input_tokens` / `output_tokens` (plus cache and reasoning tokens). The categories are a **split of that reported total**:
 
 1. **Content mode** (prompt messages captured and parseable)
-   - Each message is tokenized locally with `o200k_base` (+4 tokens per message) and assigned to system / user / assistant / tool (mapped to the tool by `tool_call` id, or by call order).
-   - The result is then fitted to the reported total. If the estimate is too high it is scaled down; any remainder goes to *Tool schemas & other context*, which mostly holds the tool JSON schemas, which are not exported.
+   - Each message is tokenized locally with `o200k_base` (+4 tokens per message) and assigned to system / user / assistant / tool (mapped to the tool by `tool_call` id, or by call order). Exported tool definitions (`gen_ai.tool.definitions`) count as *tool schemas*.
+   - The result is then fitted to the reported total. If the estimate is too high it is scaled down; any remainder goes to *Not captured*: input the model received but the client did not export (mostly earlier turns). When the prompt was rebuilt from the Copilot session log (see below) it is known to be complete, so a shortfall is a tokenizer difference and the estimates are scaled **up** instead; the request view shows the factor.
 2. **Delta mode** (no usable content)
    - Uses the growth in reported input between consecutive calls in the same agent loop.
    - The previous call's visible output (output − reasoning) becomes *assistant history*. The rest goes to the tools that ran in between, weighted by result size. Anything left over is *user context*.
    - When the context shrinks (compaction/summarization), the previous composition is scaled down.
-   - The first call of a chain splits off system instructions and the user request; the rest is *other context*.
+   - The first call of a chain splits off system instructions, the user request and tool schemas; the rest is *Not captured*.
 
 Caveats:
 
 - Category splits are **estimates**; totals are exact. Different models use different tokenizers, and o200k is a proxy for relative sizes.
 - VS Code truncates content attributes at 64,000 characters, which breaks the JSON. Those calls fall back to delta mode.
-- Earlier turns that are re-sent at the start of a new interaction show up as *other context* in two cases: in delta mode, and with incremental (CLI) content. Prompts are reconstructed within one agent run, not across runs.
+- The Copilot CLI only exports the messages added during the current turn. Without its session log (below), earlier turns (previous prompts, replies and their tool results) are sent to the model and billed, but appear only as *Not captured*; the request view flags calls where this is a large share. This also applies in delta mode. Prompts are reconstructed within one agent run, not across runs.
 - `invoke_agent` spans carry summed usage. They are never added on top of the `chat` spans, so nothing is counted twice.
+
+### Full prompts from the Copilot session log
+
+The Copilot CLI (and the Copilot app, which runs it) writes the complete transcript to `~/.copilot/session-state/<session id>/events.jsonl`. The session id equals the span's `gen_ai.conversation.id`, and every `assistant.message` carries an `apiCallId` equal to the span's `gen_ai.response.id`. The inspector replays that log to rebuild the full prompt each LLM call was sent: system prompt, all earlier turns, tool calls and tool results, with compaction summaries applied. It then shows that prompt instead of the partial telemetry, marked *📜 Full prompt*.
+
+- On by default when the inspector runs on the same machine as the CLI. Location: `COPILOT_HOME` or `~/.copilot/session-state`. Override with `Inspector:CopilotSessionStatePath`; set it to an empty string to disable.
+- The log is read-only and parsed incrementally. Nothing is stored in the database; the prompt is rebuilt when you view it.
+- This is a faithful reconstruction, not the exact wire request. Encrypted reasoning blocks, attachments and injected hook context are not included verbatim, and the provider's tokenizer differs from o200k (Claude counted ~1.45× more tokens for the same prompt in testing). Category totals are therefore scaled to the billed input tokens. Only an intercepting proxy would show the exact bytes.
+- **📤 Full request** (LLM calls) assembles everything sent with that call into one provider-neutral JSON document: model, system prompt, tool schemas and messages (the full history when the session log is available). Each part shows its size and can be expanded and copied, and the whole document can be copied at once.
+- **{ } Raw log** (on LLM and tool call panels and detail pages) opens the raw log lines for that call, prettified, with their line numbers. LLM calls match on `apiCallId` (`assistant.message` with the model's reply, `session.usage_record` with usage); tool calls match on `toolCallId` (`tool.execution_start` with the arguments, `tool.execution_complete` with the result). The CLI does not log outgoing LLM requests, so use Full request for those.
+- All JSON in the UI (payloads, attributes, overlays) is pretty-printed and syntax highlighted server-side; plain text is shown as-is.
 
 ## Extending to Copilot CLI / the Copilot app
 

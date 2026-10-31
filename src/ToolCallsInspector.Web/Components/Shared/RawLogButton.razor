@@ -1,0 +1,83 @@
+@using ToolCallsInspector.Core.Transcripts
+@inject CopilotSessionTranscriptSource Transcripts
+@inject TranscriptEnricher Enricher
+@inject InsightsService Insights
+@inject IJSRuntime JS
+
+@if (Span.Category is SpanCategory.LlmCall or SpanCategory.Tool && Transcripts.HasTranscript(Span.ConversationId))
+{
+    <button class="btn" title="Raw events.jsonl lines the Copilot session log wrote about this call" @onclick="OpenAsync">{ } Raw log</button>
+
+    @if (_open)
+    {
+        <Overlay Title="@($"Raw log · {Label}")" OnClose="() => _open = false">
+            <Subtitle>
+                <div class="muted" style="font-size:.75rem">@Description</div>
+                @if (_events is not null)
+                {
+                    <div class="muted mono" style="font-size:.72rem">@_events.SourcePath</div>
+                }
+            </Subtitle>
+            <ChildContent>
+                @if (_loading)
+                {
+                    <div class="muted">Loading…</div>
+                }
+                else if (_events is not { Events.Count: > 0 })
+                {
+                    <div class="muted">No lines in the session log reference this call.</div>
+                }
+                else
+                {
+                    @for (var i = 0; i < _events.Events.Count; i++)
+                    {
+                        var index = i;
+                        var e = _events.Events[i];
+                        <div class="log-line">
+                            <div class="log-line-header">
+                                <span><span class="badge">@(e.Type ?? "unknown")</span> <span class="muted">line @e.LineNumber · @e.Json.Length.ToString("N0") chars</span></span>
+                                <button class="btn-link" @onclick="() => CopyAsync(index)">@(_copied == index ? "Copied ✓" : "Copy")</button>
+                            </div>
+                            <CodeBlock Text="@_pretty[i]" Format="false" Max="1_000_000" />
+                        </div>
+                    }
+                }
+            </ChildContent>
+        </Overlay>
+    }
+}
+
+@code {
+    [Parameter, EditorRequired] public SpanRecord Span { get; set; } = default!;
+
+    private bool _open;
+    private bool _loading;
+    private int? _copied;
+    private TranscriptEvents? _events;
+    private string?[] _pretty = [];
+
+    private string Label => Span.Category == SpanCategory.Tool ? Span.ToolCallId ?? Span.Name : Span.Model;
+
+    private string Description => Span.Category == SpanCategory.Tool
+        ? "What the CLI logged when it started and finished this tool call (arguments and result)."
+        : "What the CLI logged for this call: the model's reply and token usage. The request itself is not logged; see 📤 Full request.";
+
+    private async Task OpenAsync()
+    {
+        _open = _loading = true;
+        _copied = null;
+        StateHasChanged();
+
+        var content = await Insights.GetContentAsync([Span.Id]);
+        var attributes = content.GetValueOrDefault(Span.Id)?.AttributesJson;
+        _events = await Task.Run(() => Enricher.TryGetEvents(Span, attributes));
+        _pretty = _events?.Events.Select(e => JsonPretty.Format(e.Json)).ToArray() ?? [];
+        _loading = false;
+    }
+
+    private async Task CopyAsync(int index)
+    {
+        await JS.InvokeVoidAsync("navigator.clipboard.writeText", _pretty[index]);
+        _copied = index;
+    }
+}

@@ -26,5 +26,7 @@ public sealed class InspectorDbContext(DbContextOptions<InspectorDbContext> opti
         var content = modelBuilder.Entity<SpanContent>();
         content.ToTable("SpanContents");
         content.HasKey(c => c.Id);
+        content.Ignore(c => c.TranscriptPath);
+        content.Ignore(c => c.TelemetryInputMessages);
     }
 }

@@ -139,7 +139,7 @@ public sealed class TokenTotals
 
     /// <summary>
     /// Share of all tokens processed (input + output): LLM output plus each input category.
-    /// Input that could not be attributed (e.g. calls without usage data) is folded into "Tool schemas &amp; other context".
+    /// Input that could not be attributed (e.g. calls without usage data) is folded into "Not captured".
     /// </summary>
     public IReadOnlyList<BreakdownSlice> Slices()
     {

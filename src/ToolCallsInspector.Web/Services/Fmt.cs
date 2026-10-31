@@ -73,6 +73,7 @@ public static class Palette
         nameof(TokenCategory.UserContext) => "#10b981",
         nameof(TokenCategory.AssistantHistory) => "#a855f7",
         nameof(TokenCategory.ToolResults) => "#ef4444",
+        nameof(TokenCategory.ToolSchemas) => "#0ea5e9",
         nameof(TokenCategory.Overhead) => "#94a3b8",
         _ => Series(StableHash(key)),
     };

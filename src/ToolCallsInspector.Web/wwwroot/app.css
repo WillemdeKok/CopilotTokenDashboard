@@ -204,6 +204,22 @@ pre.code {
 .tab-body { min-height: 4rem; }
 pre.code.tall { max-height: 70vh; }
 
+/* JSON syntax highlighting (on the dark code background) */
+pre.code .j-key { color: #93c5fd; }
+pre.code .j-str { color: #86efac; }
+pre.code .j-num { color: #fdba74; }
+pre.code .j-lit { color: #c4b5fd; }
+pre.code .j-more { color: #94a3b8; font-style: italic; }
+
+/* Session log overlay */
+.overlay { position: fixed; inset: 0; z-index: 900; background: rgba(15, 23, 42, .55); display: flex; align-items: center; justify-content: center; padding: 2rem; }
+.overlay-dialog { background: var(--panel); border-radius: 10px; box-shadow: 0 20px 50px rgba(0, 0, 0, .3); width: min(1100px, 100%); max-height: 100%; display: flex; flex-direction: column; outline: none; }
+.overlay-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem; padding: .85rem 1.1rem; border-bottom: 1px solid var(--border); }
+.overlay-body { padding: .75rem 1.1rem 1rem; overflow: auto; }
+.log-line + .log-line { margin-top: .9rem; }
+.log-line-header { display: flex; justify-content: space-between; align-items: center; font-size: .8rem; }
+.log-line pre.code.tall { max-height: none; }
+
 /* Traces: list */
 table.data tr.selected { background: var(--accent-soft); }
 table.data tr.group-row > td { background: #f9fafb; border-top: 1px solid var(--border); }

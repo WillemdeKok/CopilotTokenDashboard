@@ -5,14 +5,14 @@ namespace ToolCallsInspector.Core.Analysis;
 
 /// <summary>
 /// Splits each LLM call's reported input tokens into categories (system prompt, user context,
-/// assistant history, tool results per tool, overhead) and estimates how many tokens each tool
+/// assistant history, tool results per tool, tool schemas, not captured) and estimates how many tokens each tool
 /// call introduced into the context.
 /// </summary>
 /// <remarks>
 /// Strategy per chain of LLM calls that share a parent (one agent loop):
 /// <list type="number">
 /// <item>Content: when <c>gen_ai.input.messages</c> is captured and parseable, tokenize every message and
-/// scale the estimate to the reported input tokens (remainder = tool schemas &amp; overhead).</item>
+/// scale the estimate to the reported input tokens (remainder = content the emitter did not export, e.g. earlier turns).</item>
 /// <item>Delta: otherwise carry the previous call's composition forward and attribute the growth in reported
 /// input tokens to the previous call's output (assistant history) and the tool results produced in between.</item>
 /// </list>
@@ -44,9 +44,11 @@ public sealed class TokenAttributionEngine(ITokenCounter counter)
             var callContent = content.GetValueOrDefault(call.Span.Id);
 
             var inputs = ParseUsable(callContent?.InputMessages);
+            // A prompt rebuilt from a session transcript is already complete; never append it to the previous one.
+            var complete = callContent?.TranscriptPath is not null;
             List<ChatMessage>? prompt = inputs is null
                 ? null
-                : transcript is not null && IsIncremental(inputs, transcript) ? [.. transcript, .. inputs] : [.. inputs];
+                : !complete && transcript is not null && IsIncremental(inputs, transcript) ? [.. transcript, .. inputs] : [.. inputs];
             transcript = prompt is null
                 ? null
                 : [.. prompt, .. GenAiMessageParser.TryParse(callContent?.OutputMessages) ?? []];
@@ -69,7 +71,7 @@ public sealed class TokenAttributionEngine(ITokenCounter counter)
             var composition = prompt is null ? null : EstimateFromMessages(prompt, callContent, toolNamesById);
             if (composition is not null)
             {
-                composition.FitTo(reported);
+                composition.FitTo(reported, complete);
             }
             else if (previous?.Composition is { Method: not AttributionMethod.None } prevComp && toolShares is not null)
             {
@@ -160,8 +162,9 @@ public sealed class TokenAttributionEngine(ITokenCounter counter)
     private TokenComposition EstimateInitial(SpanContent? content)
     {
         var comp = new TokenComposition { Method = AttributionMethod.Delta };
-        comp.Add(TokenCategory.SystemPrompt, counter.Count(content?.SystemInstructions));
+        comp.Add(TokenCategory.SystemPrompt, CountCached(content?.SystemInstructions));
         comp.Add(TokenCategory.UserContext, counter.Count(content?.UserRequest));
+        comp.Add(TokenCategory.ToolSchemas, CountCached(content?.ToolDefinitions));
         return comp;
     }
 
@@ -264,10 +267,39 @@ public sealed class TokenAttributionEngine(ITokenCounter counter)
 
         if (!hasSystem)
         {
-            comp.Add(TokenCategory.SystemPrompt, counter.Count(content?.SystemInstructions));
+            comp.Add(TokenCategory.SystemPrompt, CountCached(content?.SystemInstructions));
         }
 
+        comp.Add(TokenCategory.ToolSchemas, CountCached(content?.ToolDefinitions));
         return comp;
+    }
+
+    // System prompts and tool schemas are large and usually identical across consecutive calls; avoid re-tokenizing them.
+    // Stored as an immutable reference so concurrent analyses never observe a torn text/count pair.
+    private sealed record CachedCount(string Text, int Count);
+
+    private CachedCount? _lastLarge;
+
+    private int CountCached(string? text)
+    {
+        if (string.IsNullOrEmpty(text))
+        {
+            return 0;
+        }
+
+        var last = _lastLarge;
+        if (last is not null && string.Equals(last.Text, text, StringComparison.Ordinal))
+        {
+            return last.Count;
+        }
+
+        var count = counter.Count(text);
+        if (text.Length > 4096)
+        {
+            _lastLarge = new CachedCount(text, count);
+        }
+
+        return count;
     }
 
     private static string ResolveToolName(ChatMessagePart block, Dictionary<string, string> idToName, Queue<string> pending)

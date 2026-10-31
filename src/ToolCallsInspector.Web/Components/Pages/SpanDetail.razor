@@ -33,6 +33,8 @@ else
             <div class="subtitle">@Fmt.DateTime(s.StartTime) · @Fmt.Duration(s.DurationMs) · <span class="mono">@s.Name</span></div>
         </div>
         <div style="display:flex;gap:.5rem">
+            <FullRequestButton Span="s" />
+            <RawLogButton Span="s" />
             <a class="btn" href="@Fmt.TraceUrl(_trace.TraceId, s.Id)">🧵 View in trace</a>
             @if (_node.Category == SpanCategory.LlmCall)
             {
@@ -76,11 +78,11 @@ else
             <h2><button class="btn-link" style="font-size:1rem" @onclick="() => _showRaw = !_showRaw">@(_showRaw ? "▾" : "▸") Raw span attributes</button></h2>
             @if (_showRaw)
             {
-                <pre class="code">@JsonPretty.Format(attrs)</pre>
+                <CodeBlock Text="@attrs" Max="1_000_000" />
                 @if (!string.IsNullOrEmpty(_content.ResourceJson))
                 {
                     <div class="muted" style="font-size:.75rem">Resource</div>
-                    <pre class="code">@JsonPretty.Format(_content.ResourceJson)</pre>
+                    <CodeBlock Text="@_content.ResourceJson" />
                 }
             }
         </div>
@@ -146,9 +148,6 @@ else
         return siblings.FirstOrDefault(c => c.Category == SpanCategory.LlmCall && c.CallIndex == index + offset);
     }
 
-    private static string Preview(string? text, int max = 20_000) =>
-        string.IsNullOrEmpty(text) ? "(not captured)" : text.Length > max ? text[..max] + $"\n… ({text.Length - max:N0} more chars)" : text;
-
     private RenderFragment LlmCallView(SpanNode node) => __builder =>
     {
         var s = node.Span;
@@ -205,7 +204,7 @@ else
                 @if (!string.IsNullOrWhiteSpace(_content?.UserRequest))
                 {
                     <h3 style="margin-top:1rem">User request</h3>
-                    <pre class="code">@Preview(_content.UserRequest, 1500)</pre>
+                    <CodeBlock Text="@_content.UserRequest" Max="1500" />
                 }
             </div>
         </div>
@@ -218,26 +217,31 @@ else
             }
             else
             {
-                <pre class="code">@Preview(_content?.OutputMessages)</pre>
+                <CodeBlock Text="@_content?.OutputMessages" />
             }
             @if (!string.IsNullOrWhiteSpace(_content?.ReasoningContent))
             {
                 <h3 style="margin-top:.75rem">Reasoning</h3>
-                <pre class="code">@Preview(_content.ReasoningContent)</pre>
+                <CodeBlock Text="@_content.ReasoningContent" />
             }
         </div>
 
         <div class="panel">
             <h2>Prompt messages @(_input is null ? "" : $"({_input.Count})")</h2>
+            @if (comp?.SignificantNotCaptured(s.InputTokens ?? 0) is { } missing)
+            {
+                <NotCapturedNotice Missing="missing" InputTokens="s.InputTokens ?? 0" />
+            }
             @if (_input is { Count: > 0 })
             {
+                <PromptSourceNote Content="_content" MessageCount="_input.Count" Composition="comp" />
                 <div class="muted" style="font-size:.8rem;margin-bottom:.5rem">Token counts are local o200k estimates; click a message to expand.</div>
                 <MessageList @key="@($"{Id}-in")" Messages="_input" />
             }
             else if (!string.IsNullOrEmpty(_content?.InputMessages))
             {
                 <div class="callout warn">The captured messages could not be parsed (likely truncated by the exporter at 64K characters). Showing raw content.</div>
-                <pre class="code">@Preview(_content.InputMessages)</pre>
+                <CodeBlock Text="@_content.InputMessages" />
             }
             else
             {
@@ -252,7 +256,7 @@ else
                     <span class="muted" style="font-size:.8rem;font-weight:400">≈ @Fmt.Tokens((double)Counter.Count(_content.SystemInstructions)) tokens</span></h2>
                 @if (_showSystem)
                 {
-                    <pre class="code">@Preview(_content.SystemInstructions, 100_000)</pre>
+                    <CodeBlock Text="@_content.SystemInstructions" Max="100_000" />
                 }
             </div>
         }
@@ -274,18 +278,18 @@ else
         <div class="grid cols-2">
             <div class="panel">
                 <h2>Arguments</h2>
-                <pre class="code">@Preview(JsonPretty.Format(_content?.ToolArguments))</pre>
+                <CodeBlock Text="@_content?.ToolArguments" />
             </div>
             <div class="panel">
                 <h2>Result <span class="muted" style="font-size:.8rem;font-weight:400">@(_content?.ToolResult is { } r ? $"≈ {Fmt.Tokens((double)Counter.Count(r))} tokens · {r.Length:N0} chars" : "")</span></h2>
-                <pre class="code">@Preview(_content?.ToolResult)</pre>
+                <CodeBlock Text="@_content?.ToolResult" />
             </div>
         </div>
-        @if (node.Children.Count > 0)
+        @if (Prefs.Visible(node.Children).Any() || ViewPreferences.CountTimings(node.Children) > 0)
         {
             <div class="panel">
-                <h2>Nested activity</h2>
-                @foreach (var child in node.Children.OrderBy(c => c.Span.StartTime))
+                <h2 style="display:flex;align-items:center;gap:1rem">Nested activity <TimingToggle Count="@ViewPreferences.CountTimings(node.Children)" /></h2>
+                @foreach (var child in Prefs.Visible(node.Children).OrderBy(c => c.Span.StartTime))
                 {
                     <SpanItem @key="child.Span.Id" Node="child" />
                 }
@@ -309,7 +313,7 @@ else
         </div>
         @if (!string.IsNullOrWhiteSpace(node.Span.UserPrompt))
         {
-            <div class="panel"><h2>Prompt</h2><pre class="code">@node.Span.UserPrompt</pre></div>
+            <div class="panel"><h2>Prompt</h2><CodeBlock Text="@node.Span.UserPrompt" Format="false" /></div>
         }
         <div class="grid cols-2">
             <div class="panel">
@@ -322,8 +326,8 @@ else
             </div>
         </div>
         <div class="panel">
-            <h2>Timeline</h2>
-            @foreach (var item in node.TimelineItems())
+            <h2 style="display:flex;align-items:center;gap:1rem">Timeline <TimingToggle Count="@ViewPreferences.CountTimings(node.Children)" /></h2>
+            @foreach (var item in Prefs.Visible(node.TimelineItems()))
             {
                 <SpanItem @key="item.Span.Id" Node="item" />
             }

@@ -7,6 +7,7 @@ public enum TokenCategory
     UserContext,
     AssistantHistory,
     ToolResults,
+    ToolSchemas,
     Overhead,
 }
 
@@ -30,7 +31,8 @@ public static class TokenCategoryInfo
         TokenCategory.UserContext => "User prompt & context",
         TokenCategory.AssistantHistory => "Assistant history",
         TokenCategory.ToolResults => "Tool results",
-        TokenCategory.Overhead => "Tool schemas & other context",
+        TokenCategory.ToolSchemas => "Tool schemas",
+        TokenCategory.Overhead => "Not captured",
         _ => category.ToString(),
     };
 
@@ -40,7 +42,8 @@ public static class TokenCategoryInfo
         TokenCategory.UserContext => "Your messages plus attached context (files, selections, instructions).",
         TokenCategory.AssistantHistory => "Previous assistant replies and tool-call arguments re-sent as history.",
         TokenCategory.ToolResults => "Output returned by tools and re-sent to the model on each later call.",
-        TokenCategory.Overhead => "Remaining reported input not attributable to captured content (mainly tool schemas, prior turns, formatting).",
+        TokenCategory.ToolSchemas => "Definitions of every available tool (name, description, parameters) sent with each request.",
+        TokenCategory.Overhead => "Reported input with no captured content behind it: mostly earlier turns of the conversation (the Copilot CLI only exports messages added in the current turn), plus provider formatting.",
         _ => string.Empty,
     };
 }
@@ -57,6 +60,21 @@ public sealed class TokenComposition
     public double Total => ByCategory.Values.Sum();
 
     public double Get(TokenCategory category) => ByCategory.GetValueOrDefault(category);
+
+    /// <summary>
+    /// Reported input the captured content couldn't account for (e.g. earlier turns the client didn't export),
+    /// or null when it isn't a meaningful share (at least 1,000 tokens and 10% of the input).
+    /// </summary>
+    public double? SignificantNotCaptured(double inputTokens)
+    {
+        if (Method != AttributionMethod.Content || inputTokens <= 0)
+        {
+            return null;
+        }
+
+        var missing = Get(TokenCategory.Overhead);
+        return missing >= 1000 && missing / inputTokens >= 0.1 ? missing : null;
+    }
 
     public void Add(TokenCategory category, double value, string? toolName = null)
     {
@@ -104,9 +122,10 @@ public sealed class TokenComposition
 
     /// <summary>
     /// Makes the composition sum to the reported input tokens: scales down when estimates overshoot,
-    /// otherwise assigns the remainder to <see cref="TokenCategory.Overhead"/>.
+    /// otherwise assigns the remainder to <see cref="TokenCategory.Overhead"/>. When the captured prompt is known to be
+    /// <paramref name="complete"/>, an undershoot is a tokenizer difference (o200k vs. the model's own), so it scales up instead.
     /// </summary>
-    public void FitTo(double reportedTotal)
+    public void FitTo(double reportedTotal, bool complete = false)
     {
         if (reportedTotal <= 0)
         {
@@ -114,7 +133,12 @@ public sealed class TokenComposition
         }
 
         var total = Total;
-        if (total > reportedTotal)
+        if (complete && total > 0 && total < reportedTotal)
+        {
+            TokenizerScale = reportedTotal / total;
+            Scale(TokenizerScale.Value);
+        }
+        else if (total > reportedTotal)
         {
             Scale(reportedTotal / total);
         }
@@ -123,4 +147,10 @@ public sealed class TokenComposition
             Add(TokenCategory.Overhead, reportedTotal - total);
         }
     }
+
+    /// <summary>
+    /// Factor by which estimates of a complete prompt were scaled up to match the reported input tokens,
+    /// i.e. how many more tokens the model's tokenizer produced than o200k. Null when not applied.
+    /// </summary>
+    public double? TokenizerScale { get; private set; }
 }

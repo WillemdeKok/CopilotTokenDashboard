@@ -1,0 +1,29 @@
+@if (Content?.TranscriptPath is { } path)
+{
+    <div class="callout" style="margin-bottom:.5rem;font-size:.8rem">
+        📜 <strong>Full prompt</strong>: @MessageCount message@(MessageCount == 1 ? "" : "s"), rebuilt from the local Copilot session log
+        <span class="mono" title="@path">@System.IO.Path.GetFileName(System.IO.Path.GetDirectoryName(path))/events.jsonl</span>.
+        The telemetry itself only carried @TelemetryCount message@(TelemetryCount == 1 ? "" : "s") (those added during this turn).
+        @if (Composition?.TokenizerScale is { } scale)
+        {
+            <br />
+            <span class="muted" title="Category sizes are counted locally with the o200k tokenizer, then scaled proportionally so they add up to the input tokens the provider billed.">
+                Token estimates scaled ×@scale.ToString("0.00") to match the reported input tokens. The prompt is complete, the model's tokenizer just counts this content differently than o200k.
+            </span>
+        }
+    </div>
+}
+else if (MessageCount > 0)
+{
+    <div class="muted" style="font-size:.75rem;margin-bottom:.4rem">
+        @MessageCount message@(MessageCount == 1 ? "" : "s") in <span class="mono">gen_ai.input.messages</span>. Some clients (e.g. Copilot CLI) only send the messages added since the previous call.
+    </div>
+}
+
+@code {
+    [Parameter, EditorRequired] public SpanContent? Content { get; set; }
+    [Parameter, EditorRequired] public int MessageCount { get; set; }
+    [Parameter] public TokenComposition? Composition { get; set; }
+
+    private int TelemetryCount => GenAiMessageParser.TryParse(Content?.TelemetryInputMessages)?.Count ?? 0;
+}

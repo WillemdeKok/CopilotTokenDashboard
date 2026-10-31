@@ -10,26 +10,29 @@ public static class Waterfall
 {
     public static double TotalMs(TraceAnalysis trace) => Math.Max(1, (trace.End - trace.Start).TotalMilliseconds);
 
-    public static IReadOnlyList<WaterfallRow> Build(TraceAnalysis trace, ISet<string>? collapsed = null)
+    public static IReadOnlyList<WaterfallRow> Build(TraceAnalysis trace, ISet<string>? collapsed = null, bool hideTimings = false)
     {
         var rows = new List<WaterfallRow>();
-        foreach (var root in trace.Roots.OrderBy(r => r.Span.StartTime))
+        foreach (var root in Visible(trace.Roots).OrderBy(r => r.Span.StartTime))
         {
             Add(root, 0);
         }
 
         return rows;
 
+        IEnumerable<SpanNode> Visible(IEnumerable<SpanNode> nodes) => hideTimings ? nodes.Where(n => !n.IsTiming) : nodes;
+
         void Add(SpanNode node, int depth)
         {
             var (left, width) = Position(trace, node.Span.StartTime, node.Span.DurationMs);
-            rows.Add(new WaterfallRow(node, depth, left, width, node.Children.Count > 0));
+            var children = Visible(node.Children).OrderBy(c => c.Span.StartTime).ToList();
+            rows.Add(new WaterfallRow(node, depth, left, width, children.Count > 0));
             if (collapsed?.Contains(node.Span.Id) == true)
             {
                 return;
             }
 
-            foreach (var child in node.Children.OrderBy(c => c.Span.StartTime))
+            foreach (var child in children)
             {
                 Add(child, depth + 1);
             }

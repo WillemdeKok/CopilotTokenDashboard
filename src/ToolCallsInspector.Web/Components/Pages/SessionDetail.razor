@@ -62,7 +62,10 @@ else
         </div>
     </div>
 
-    <h2 style="margin-top:1rem">Conversation</h2>
+    <div style="display:flex;align-items:center;gap:1rem;margin-top:1rem">
+        <h2 style="margin:0">Conversation</h2>
+        <TimingToggle Count="@ViewPreferences.CountTimings(_session.Traces.SelectMany(tr => tr.Roots))" />
+    </div>
     @foreach (var trace in _session.Traces)
     {
         <InteractionCard @key="trace.TraceId" Trace="trace" Number="@(trace.IsBackground ? null : ++number)" />
