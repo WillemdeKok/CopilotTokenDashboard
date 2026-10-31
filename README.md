@@ -1,5 +1,8 @@
 # Tool Calls Inspector
 
+> [!WARNING]
+> **AI-generated code, for presentation purposes only.** This code was created by AI and has not been reviewed by the repository owner. It is intended for demos and presentations only, not for production use.
+
 A local .NET 10 + Blazor app that shows where GitHub Copilot's tokens go. You can see every LLM call, every tool call, how they connect within a conversation, and how each call's prompt breaks down (system prompt, your context, history, tool results, …).
 
 ## Why OpenTelemetry and not hooks?
