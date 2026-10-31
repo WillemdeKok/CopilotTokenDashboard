@@ -20,7 +20,17 @@ else
 {
     var t = _session.Totals;
     var slices = t.Slices();
-    var calls = _session.Traces.SelectMany(tr => tr.LlmCalls).OrderBy(c => c.Span.StartTime).ToList();
+    var turns = new Dictionary<string, int>();
+    foreach (var trace in _session.Traces.Where(tr => !tr.IsBackground))
+    {
+        turns[trace.TraceId] = turns.Count + 1;
+    }
+
+    // The chart follows the main agent loop: sub-agent calls (nested under a tool) and background requests have their own context.
+    var allCalls = _session.Traces.SelectMany(tr => tr.LlmCalls.Select(c => (Trace: tr, Call: c))).ToList();
+    var calls = allCalls.Where(x => !x.Trace.IsBackground && !x.Call.IsInSubAgent).OrderBy(x => x.Call.Span.StartTime).Select(x => x.Call).ToList();
+    var subAgentCalls = allCalls.Count(x => !x.Trace.IsBackground && x.Call.IsInSubAgent);
+    var backgroundCalls = allCalls.Count(x => x.Trace.IsBackground);
     var number = 0;
 
     <div class="page-header">
@@ -50,15 +60,23 @@ else
         <div class="panel">
             <h2>Token breakdown</h2>
             <Donut Slices="slices" CenterLabel="session tokens">
-                <BreakdownTable Slices="slices" ToolDetails="@(t.ByTool.Values.Where(x => x.ConsumedInputTokens > 0).ToDictionary(x => x.ToolName, x => x.ConsumedInputTokens))" />
+                <BreakdownTable Slices="slices"
+                                ToolDetails="@(t.ByTool.Values.Where(x => x.ConsumedInputTokens > 0).ToDictionary(x => x.ToolName, x => x.ConsumedInputTokens))"
+                                CachedToolDetails="@(t.ByTool.Values.Where(x => x.ConsumedInputTokens > 0).ToDictionary(x => x.ToolName, x => x.CachedConsumedInputTokens))" />
             </Donut>
         </div>
         <div class="panel">
             <h2>Context growth per LLM call</h2>
             <div class="muted" style="font-size:.85rem;margin-bottom:.5rem">
-                Every call re-sends the whole conversation. Watch how tool results and history accumulate.
+                Every call of the main agent loop re-sends the whole conversation. Watch how tool results and history accumulate.
+                Columns are labelled <span class="mono">T{interaction}·#{call}</span>, matching the call numbers in the conversation below.
+                @if (subAgentCalls > 0 || backgroundCalls > 0)
+                {
+                    <text> Not shown: </text>
+                    @(string.Join(" and ", new[] { subAgentCalls > 0 ? $"{subAgentCalls} sub-agent call{(subAgentCalls == 1 ? "" : "s")} (see the tool that started them)" : null, backgroundCalls > 0 ? $"{backgroundCalls} background call{(backgroundCalls == 1 ? "" : "s")}" : null }.OfType<string>()))<text>.</text>
+                }
             </div>
-            <CallColumns Calls="calls" />
+            <CallColumns Calls="calls" Label="@(c => turns.TryGetValue(c.Span.TraceId, out var turn) ? $"T{turn}·#{c.CallIndex}" : $"#{c.CallIndex}")" />
         </div>
     </div>
 
@@ -78,4 +96,7 @@ else
     private SessionAnalysis? _session;
 
     protected override async Task LoadAsync() => _session = await Insights.GetSessionAsync(Key);
+
+    protected override bool IsRelevant(SpansIngestedEvent e) =>
+        _session is null || e.Touches([_session.SessionKey], _session.Traces.Select(t => t.TraceId).ToHashSet());
 }

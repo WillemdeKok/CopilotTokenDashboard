@@ -174,7 +174,7 @@ else
                     </div>
                 }
                 <Donut Slices="slices" CenterLabel="call tokens">
-                    <BreakdownTable Slices="slices" ToolDetails="comp?.ToolResultsByTool" />
+                    <BreakdownTable Slices="slices" ToolDetails="comp?.ToolResultsByTool" CachedToolDetails="@(comp is { CachedToolResultsByTool.Count: > 0 } ? comp.CachedToolResultsByTool : null)" />
                 </Donut>
             </div>
             <div class="panel">
@@ -234,7 +234,7 @@ else
             }
             @if (_input is { Count: > 0 })
             {
-                <PromptSourceNote Content="_content" MessageCount="_input.Count" Composition="comp" />
+                <PromptSourceNote Content="_content" MessageCount="_input.Count" Composition="comp" SavedSource="node.PromptSource" />
                 <div class="muted" style="font-size:.8rem;margin-bottom:.5rem">Token counts are local o200k estimates; click a message to expand.</div>
                 <MessageList @key="@($"{Id}-in")" Messages="_input" />
             }
@@ -270,7 +270,18 @@ else
             <Kpi Label="Duration" Value="@Fmt.Duration(s.DurationMs)" />
             <Kpi Label="Added to context" Value="@(node.IntroducedTokens is { } it ? Fmt.Tokens(it) : "–")" Sub="@(node.IntroducedIsEstimate ? "estimated from result size" : "measured from input growth")" />
             <Kpi Label="Tool call id" Value="@Fmt.Truncate(s.ToolCallId ?? "–", 18)" Sub="@s.ToolType" />
+            @if (node.SubAgent is { } sub)
+            {
+                <Kpi Label="Sub-agent tokens" Value="@Fmt.Tokens(sub.Total)" Sub="@($"{sub.LlmCalls} LLM calls · in {Fmt.Tokens(sub.Input)} ({Fmt.Tokens(sub.CacheRead)} cached) · out {Fmt.Tokens(sub.Output)}")" />
+            }
         </div>
+        @if (node.SubAgent is not null)
+        {
+            <div class="callout">
+                This tool started a sub-agent. <strong>Added to context</strong> is only what its final result added to the parent conversation;
+                <strong>sub-agent tokens</strong> is everything the sub-agent's own LLM calls spent (counted once in the session and dashboard totals).
+            </div>
+        }
         @if (node.RequestedBy is { } by)
         {
             <div class="callout">Requested by <a href="@Fmt.SpanUrl(by.Span.Id)">LLM call #@by.CallIndex (@by.Span.Model)</a>. Its result is re-sent as input on every later call in this interaction.</div>

@@ -16,7 +16,16 @@
         {
             <tr class="clickable" @onclick="() => Nav.NavigateTo(Fmt.SessionUrl(s.SessionKey))">
                 <td><a href="@Fmt.SessionUrl(s.SessionKey)">@Fmt.OneLine(s.Title, 90)</a></td>
-                <td class="nowrap">@Clients.GetDisplayName(s.ClientId)</td>
+                <td class="nowrap">
+                    @if (s.ClientId == DemoClientProfile.Id)
+                    {
+                        <span class="badge accent" title="Sample data loaded from the Setup page">demo</span>
+                    }
+                    else
+                    {
+                        @Clients.GetDisplayName(s.ClientId)
+                    }
+                </td>
                 <td class="num" title="@Fmt.DateTime(s.End)">@Fmt.Relative(s.End)</td>
                 <td class="num">@s.InteractionCount</td>
                 <td class="num">@s.Totals.LlmCalls</td>

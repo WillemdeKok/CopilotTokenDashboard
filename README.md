@@ -25,7 +25,7 @@ flowchart LR
         NORM["SpanNormalizer +<br/>IClientProfile"]
         DB[(SQLite)]
         AN["TraceAnalyzer +<br/>TokenAttributionEngine"]
-        INS[InsightsService<br/>cached per trace]
+        INS[InsightsService<br/>per session, saved breakdowns]
         UI["Blazor Server UI<br/>:5180 (live updates)"]
     end
     VS -- OTLP --> OTLP
@@ -73,8 +73,11 @@ dotnet run --project src/ToolCallsInspector.Web
 - UI: <http://localhost:5180>
 - OTLP receiver: <http://localhost:4318/v1/traces> (`/v1/logs` and `/v1/metrics` are accepted and ignored)
 - Data: `%LOCALAPPDATA%\ToolCallsInspector\inspector.db`. Override with `Inspector:DatabasePath` (e.g. env var `Inspector__DatabasePath`).
+- Retention: `Inspector:RetentionDays` (default `0`, which keeps everything). Traces whose last span ended longer ago are deleted at startup and then hourly. The **Setup** page has a retention control; its value is saved in the database and overrides the config.
+- Memory: `Inspector:AnalysisCacheSize` (default `2000`) caps how many trace analyses are kept in memory. The least recently used are evicted.
+- Existing databases are upgraded in place at startup (new tables and indexes are added). You don't need to delete the file.
 
-No client set up yet? Use **Setup → Load demo data**. To wipe everything, use **🗑️ Clear all data** at the bottom of the sidebar (or on the Setup page). It asks for confirmation, deletes all captured telemetry and compacts the SQLite file.
+No client set up yet? Use **Setup → Load demo data**. Demo data appears as its own client, *Demo data*, with a **demo** badge on its sessions. **Setup → Remove demo data** deletes only that data. To wipe everything, use **🗑️ Clear all data** at the bottom of the sidebar (or on the Setup page). It asks for confirmation, deletes all captured telemetry and compacts the SQLite file.
 
 ```powershell
 dotnet test
@@ -177,13 +180,16 @@ copilot -p "What will the weather be like in Amsterdam on 2026-08-01?" --additio
 ## What you get
 
 - **Dashboard**
+  - A time range selector (default: last 7 days).
   - Total tokens, input (fresh vs. cached), output/reasoning and cache hit rate.
-  - A "Where did the tokens go?" donut covering LLM output, system prompt, user prompt & context, assistant history, tool results (per tool), tool schemas, and input the client did not capture.
+  - A "Where did the tokens go?" donut covering LLM output, system prompt, user prompt & context, assistant history, tool results (per tool), tool schemas, and input the client did not capture. The table next to it splits each input category, and each tool, into **fresh** and **cached** input (see [Fresh vs. cached input](#fresh-vs-cached-input)).
   - Tables by model, by tool and by client, plus recent sessions.
+- **Sessions**
+  - Sort by last activity, tokens or LLM calls. Shows 100 sessions at a time, with **Show more**.
 - **Session**
   - Every interaction (agent run) and background request, in order.
   - Each LLM call shows its token counts and a composition bar. The tools it requested are nested beneath it, sub-agents are nested under their `runSubagent` tool call, and hooks are shown inline.
-  - A *context growth* chart stacks each call's composition, so you can see tool results accumulate. Click a column to open the call.
+  - A *context growth* chart stacks the composition of each call in the **main agent loop**, so you can see tool results accumulate. Sub-agent calls (they have their own context) and background requests are left out; the chart says how many. Columns are labelled `T{interaction}·#{call}`, matching the `LLM call #N` numbers in the conversation. Click a column to open the call.
 - **Traces**
   - *Traces* tab: every trace, newest first, with a mini timeline, models, call counts, duration and tokens. Filter by prompt, model or tool. Traces are grouped under their conversation (one trace per user turn), with per-conversation totals; untick *group by conversation* for a flat list.
   - *LLM calls* tab: a flat log of all LLM traffic. Expand any row to see its request messages, response, system prompt, tool schemas and raw attributes inline.
@@ -195,10 +201,13 @@ copilot -p "What will the weather be like in Amsterdam on 2026-08-01?" --additio
 - **Tool call**
   - Arguments, result, duration and status.
   - Tokens added to the context, and which LLM call requested it.
+  - For a tool that started a sub-agent (e.g. `runSubagent`): the sub-agent's own tokens (input, cached, output) and LLM calls, also shown as a badge on the tool row in the conversation.
 - **Tools**
+  - A time range selector, the same one as the dashboard (default: last 7 days).
   - *Introduced* tokens: the size of a tool's results when first sent.
-  - *Consumed* tokens: what those results cost across every later call, because they are re-sent on each one.
-  - Re-send factor, and share of all input.
+  - *Consumed* tokens: what those results cost across every later call, because they are re-sent on each one. These are split into *fresh* and *cached*, since re-sent results are mostly prompt-cache reads.
+  - Re-send factor (fresh consumed ÷ introduced) and share of fresh input.
+  - *Sub-agent tokens*: everything the sub-agents a tool started spent. They are already part of the global totals, so they're shown per tool but never added twice.
 
 ## How token attribution works
 
@@ -217,15 +226,37 @@ Caveats:
 
 - Category splits are **estimates**; totals are exact. Different models use different tokenizers, and o200k is a proxy for relative sizes.
 - VS Code truncates content attributes at 64,000 characters, which breaks the JSON. Those calls fall back to delta mode.
-- The Copilot CLI only exports the messages added during the current turn. Without its session log (below), earlier turns (previous prompts, replies and their tool results) are sent to the model and billed, but appear only as *Not captured*; the request view flags calls where this is a large share. This also applies in delta mode. Prompts are reconstructed within one agent run, not across runs.
+- The Copilot CLI only exports the messages added during the current turn. The inspector chains those messages together across a session's turns (see [Across turns](#across-turns)). History from before the first captured turn still appears as *Not captured*; the request view flags calls where this is a large share.
 - `invoke_agent` spans carry summed usage. They are never added on top of the `chat` spans, so nothing is counted twice.
+
+### Full or incremental prompts
+
+Each client profile declares how its telemetry captures input messages (`IClientProfile.InputCapture`):
+
+| Client | Capture | Meaning |
+|---|---|---|
+| VS Code Copilot Chat, Claude Code, demo data | `Full` | Every call carries the whole prompt, so it is never combined with earlier calls. History is not double-counted, even when compaction changes the first message. |
+| Copilot CLI / app | `Incremental` | Every call carries only the messages added since the previous call. They are appended to the previous call's prompt. |
+| Other OTel GenAI clients | `Unknown` | Heuristic: messages are treated as incremental when they don't start with the previous call's first message. |
+
+### Across turns
+
+Every user turn is a new trace. A session's traces are analysed in order, and the main agent loop's last call (its composition, and for incremental clients its prompt) carries into the first call of the next turn. Earlier turns are therefore attributed as history and tool results instead of *Not captured*, in both content and delta mode. Sub-agents and background requests don't carry. Because of this, a new span in one turn can change later turns of the same session, and the cache invalidates them.
+
+### Fresh vs. cached input
+
+Providers report how many input tokens were prompt-cache reads (`gen_ai.usage.cache_read.input_tokens`). Cached input is much cheaper than fresh input, and re-sent history and tool results are mostly cached. A cache hit is always a prefix of the prompt, so the inspector splits each call's cache reads over its categories, earliest content first: system prompt, then tool schemas, then history that was already in the previous call's prompt, then newer content. Within tool results it uses the same order per tool. The split is an estimate; the totals (fresh, cached, per category) stay exact.
+
+### Saved breakdowns
+
+Once a trace is complete (no in-progress spans), its computed breakdown is saved in the database. That covers each call's composition including the cached split, each tool's introduced tokens, which local log the prompt came from, and what carries into the next turn. A saved breakdown is used as long as the trace and its predecessor in the session are unchanged. Historical numbers therefore don't change when local session logs or API body files are deleted, and a restart doesn't recompute every trace. When the source log is gone, the request view says the breakdown was computed from it. Saved breakdowns are versioned and recomputed when the attribution logic changes. Retention, **Remove demo data** and **Clear all data** delete them with their traces.
 
 ### Full prompts from the Copilot session log
 
 The Copilot CLI (and the Copilot app, which runs it) writes the complete transcript to `~/.copilot/session-state/<session id>/events.jsonl`. The session id equals the span's `gen_ai.conversation.id`, and every `assistant.message` carries an `apiCallId` equal to the span's `gen_ai.response.id`. The inspector replays that log to rebuild the full prompt each LLM call was sent: system prompt, all earlier turns, tool calls and tool results, with compaction summaries applied. It then shows that prompt instead of the partial telemetry, marked *📜 Full prompt*.
 
 - On by default when the inspector runs on the same machine as the CLI. Location: `COPILOT_HOME` or `~/.copilot/session-state`. Override with `Inspector:CopilotSessionStatePath`; set it to an empty string to disable.
-- The log is read-only and parsed incrementally. Nothing is stored in the database; the prompt is rebuilt when you view it.
+- The log is read-only and parsed incrementally. The prompt itself isn't stored in the database; it is rebuilt when you view it. The token breakdown computed from it is saved (see [Saved breakdowns](#saved-breakdowns)).
 - This is a faithful reconstruction, not the exact wire request. Encrypted reasoning blocks, attachments and injected hook context are not included verbatim, and the provider's tokenizer differs from o200k (Claude counted ~1.45× more tokens for the same prompt in testing). Category totals are therefore scaled to the billed input tokens. Only an intercepting proxy would show the exact bytes.
 - **📤 Full request** (LLM calls) assembles everything sent with that call into one provider-neutral JSON document: model, system prompt, tool schemas and messages (the full history when the session log is available). Each part shows its size and can be expanded and copied, and the whole document can be copied at once.
 - **{ } Raw log** (on LLM and tool call panels and detail pages) opens the raw log lines for that call, prettified, with their line numbers. LLM calls match on `apiCallId` (`assistant.message` with the model's reply, `session.usage_record` with usage); tool calls match on `toolCallId` (`tool.execution_start` with the arguments, `tool.execution_complete` with the result). The CLI does not log outgoing LLM requests, so use Full request for those.
@@ -253,7 +284,7 @@ With `OTEL_LOG_RAW_API_BODIES=file:<dir>`, Claude Code writes the exact Messages
 
 The pipeline is client-agnostic:
 
-- **`IClientProfile`** (`Core/Clients`) detects a client from resource/span attributes. It can categorize spans the GenAI conventions don't cover, and it fills the normalized fields before the generic derivations run. `ClaudeCodeProfile` is a complete example of a client with its own attribute names.
+- **`IClientProfile`** (`Core/Clients`) detects a client from resource/span attributes. It can categorize spans the GenAI conventions don't cover, and it fills the normalized fields before the generic derivations run. Set `InputCapture` to `Full` or `Incremental` so prompts aren't guessed (see [Full or incremental prompts](#full-or-incremental-prompts)). `ClaudeCodeProfile` is a complete example of a client with its own attribute names.
 - **`ITranscriptSource`** (`Core/Transcripts`) rebuilds full prompts from a client's local log. Derive from `LocalTranscriptSource` (locating the file and caching) and `JsonlTranscript` (incremental tailing and the raw-line index), and register it as an `ITranscriptSource` singleton. `TranscriptEnricher` asks each source in turn, so an exact source can precede a reconstructing one; set `ProvidesEvents => false` on a source without raw log lines.
 - **OTLP push**: any client that exports OTLP/HTTP (JSON or protobuf) to `http://localhost:4318` works unchanged. The env vars shown on the Setup page are the standard `OTEL_EXPORTER_OTLP_*` variables plus the `COPILOT_OTEL_*` switches VS Code uses. **Check the CLI's own docs for its exact opt-in variables.**
 - **`ITelemetrySource`** is for pull-based sources, for example reading the Copilot CLI's local `~/.copilot/session-state/*/events.jsonl` and its `session-store.db` usage table. Implement it, map records to `RawSpan` using the GenAI attribute names (`GenAiKeys`), and register it with `services.AddTelemetrySource<MySource>()`. `TelemetrySourceHost` runs it and feeds the same ingestor.

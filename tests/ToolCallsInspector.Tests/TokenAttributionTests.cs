@@ -160,7 +160,7 @@ public class TokenAttributionTests
     public void Incremental_messages_are_accumulated_into_the_full_prompt()
     {
         // The Copilot CLI only captures the messages added since the previous call.
-        var f = new SpanFactory();
+        var f = new SpanFactory { Service = "github-copilot" };
         var agent = f.Agent(0, 10);
         var system = Words(300, "system");
         var user = Words(200, "user");

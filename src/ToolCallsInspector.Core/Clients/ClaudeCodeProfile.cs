@@ -26,6 +26,9 @@ public sealed class ClaudeCodeProfile : IClientProfile
     public string DisplayName => "Claude Code";
     public int Priority => 15;
 
+    // Claude Code sends the whole conversation with every request.
+    public InputCapture InputCapture => InputCapture.Full;
+
     public bool Matches(RawSpan span) =>
         span.Name.StartsWith(SpanPrefix, StringComparison.Ordinal)
         || string.Equals(span.ResourceAttributes.GetString("service.name"), "claude-code", StringComparison.OrdinalIgnoreCase);

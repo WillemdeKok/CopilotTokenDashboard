@@ -1,4 +1,5 @@
 using System.Text.Json;
+using ToolCallsInspector.Core.Clients;
 using ToolCallsInspector.Core.Storage;
 
 namespace ToolCallsInspector.Core.Analysis;
@@ -18,23 +19,27 @@ namespace ToolCallsInspector.Core.Analysis;
 /// </list>
 /// Tool "introduced" tokens always come from the input growth between calls (exact totals from the provider),
 /// distributed over the tools that ran in between, weighted by their result sizes when content is available.
+/// A chain can continue from an <see cref="AttributionCarry"/>: the session's main loop at the end of the previous trace.
+/// Each call's provider-reported cache read is then split over the categories (<see cref="TokenComposition.ApplyCacheReads"/>).
 /// </remarks>
-public sealed class TokenAttributionEngine(ITokenCounter counter)
+public sealed class TokenAttributionEngine(ITokenCounter counter, IClientCatalog? clients = null)
 {
     private const int PerMessageOverhead = 4;
 
-    public void AttributeChain(IReadOnlyList<SpanNode> llmCalls, IReadOnlyList<SpanNode> tools, IReadOnlyDictionary<string, SpanContent> content)
+    /// <summary>Attributes one chain and returns the state its last call leaves behind (<paramref name="carryIn"/> when no call was attributed).</summary>
+    public AttributionCarry? AttributeChain(IReadOnlyList<SpanNode> llmCalls, IReadOnlyList<SpanNode> tools, IReadOnlyDictionary<string, SpanContent> content, AttributionCarry? carryIn = null)
     {
         var ordered = llmCalls.OrderBy(c => c.Span.StartTime).ToList();
         var toolNamesById = tools
             .Where(t => !string.IsNullOrEmpty(t.Span.ToolCallId) && !string.IsNullOrEmpty(t.Span.ToolName))
             .GroupBy(t => t.Span.ToolCallId!, StringComparer.Ordinal)
             .ToDictionary(g => g.Key, g => g.First().Span.ToolName!, StringComparer.Ordinal);
-        SpanNode? previous = null;
+        var carryNode = carryIn is null ? null : CarryNode(carryIn);
+        var previous = carryNode;
 
         // Prompt + response of the previous call. Emitters such as the Copilot CLI only capture the messages that
         // are new since the previous call, so the full prompt is reconstructed by appending them to this transcript.
-        List<ChatMessage>? transcript = null;
+        List<ChatMessage>? transcript = carryIn?.Transcript is { } carried ? [.. carried] : null;
 
         for (var i = 0; i < ordered.Count; i++)
         {
@@ -52,7 +57,7 @@ public sealed class TokenAttributionEngine(ITokenCounter counter)
                 && (!string.IsNullOrEmpty(callContent!.SystemInstructions) || inputs?.Any(m => m.Role is "system" or "developer") == true);
             List<ChatMessage>? prompt = inputs is null
                 ? null
-                : !fromTranscript && transcript is not null && IsIncremental(inputs, transcript) ? [.. transcript, .. inputs] : [.. inputs];
+                : !fromTranscript && transcript is not null && IsIncremental(CaptureOf(call), inputs, transcript) ? [.. transcript, .. inputs] : [.. inputs];
             transcript = prompt is null
                 ? null
                 : [.. prompt, .. GenAiMessageParser.TryParse(callContent?.OutputMessages) ?? []];
@@ -87,7 +92,9 @@ public sealed class TokenAttributionEngine(ITokenCounter counter)
                 composition.FitTo(reported);
             }
 
+            composition.ApplyCacheReads(call.Span.CacheReadTokens ?? 0, previous?.Composition);
             call.Composition = composition;
+            call.PromptSource = fromTranscript ? callContent!.TranscriptSource ?? "session log" : null;
             previous = call;
         }
 
@@ -100,7 +107,45 @@ public sealed class TokenAttributionEngine(ITokenCounter counter)
                 tool.IntroducedIsEstimate = true;
             }
         }
+
+        if (previous is null || ReferenceEquals(previous, carryNode))
+        {
+            return carryIn;
+        }
+
+        return new AttributionCarry
+        {
+            Composition = previous.Composition!,
+            InputTokens = previous.Span.InputTokens ?? 0,
+            OutputTokens = previous.Span.OutputTokens ?? 0,
+            ReasoningTokens = previous.Span.ReasoningTokens ?? 0,
+            Start = previous.Span.StartTime,
+            Transcript = transcript,
+        };
     }
+
+    private static SpanNode CarryNode(AttributionCarry carry) => new()
+    {
+        IsPlaceholder = true,
+        Composition = carry.Composition,
+        Span = new SpanRecord
+        {
+            Id = "carry",
+            TraceId = string.Empty,
+            SpanId = "carry",
+            ClientId = string.Empty,
+            Name = "previous turn",
+            Category = SpanCategory.LlmCall,
+            StartTime = carry.Start,
+            EndTime = carry.Start,
+            InputTokens = carry.InputTokens,
+            OutputTokens = carry.OutputTokens,
+            ReasoningTokens = carry.ReasoningTokens,
+        },
+    };
+
+    private InputCapture CaptureOf(SpanNode call) =>
+        clients?.Find(call.Span.ClientId)?.InputCapture ?? InputCapture.Unknown;
 
     /// <summary>Splits the input growth between two calls; returns (assistantShare, per-tool shares, leftover).</summary>
     private GrowthShares DistributeGrowth(SpanNode previous, SpanNode call, List<SpanNode> between, IReadOnlyDictionary<string, SpanContent> content)
@@ -193,13 +238,20 @@ public sealed class TokenAttributionEngine(ITokenCounter counter)
     }
 
     /// <summary>
-    /// True when <paramref name="inputs"/> only holds the messages added since the previous call: the prompt does not
-    /// start where the conversation started. A compaction summary always starts a fresh transcript.
+    /// True when <paramref name="inputs"/> only holds the messages added since the previous call. This follows the client's
+    /// declared <see cref="InputCapture"/>; only clients that don't declare it fall back to a heuristic (the prompt does not
+    /// start where the conversation started). A compaction summary always starts a fresh transcript.
     /// </summary>
-    private static bool IsIncremental(IReadOnlyList<ChatMessage> inputs, List<ChatMessage> transcript) =>
-        transcript.Count > 0
-        && !SameMessage(inputs[0], transcript[0])
-        && !inputs.SelectMany(m => m.Parts).Any(p => p.Kind == MessagePartKind.Other && p.Content.Contains("compaction", StringComparison.OrdinalIgnoreCase));
+    private static bool IsIncremental(InputCapture capture, IReadOnlyList<ChatMessage> inputs, List<ChatMessage> transcript)
+    {
+        if (capture == InputCapture.Full || transcript.Count == 0
+            || inputs.SelectMany(m => m.Parts).Any(p => p.Kind == MessagePartKind.Other && p.Content.Contains("compaction", StringComparison.OrdinalIgnoreCase)))
+        {
+            return false;
+        }
+
+        return capture == InputCapture.Incremental || !SameMessage(inputs[0], transcript[0]);
+    }
 
     private static bool SameMessage(ChatMessage a, ChatMessage b) =>
         string.Equals(a.Role, b.Role, StringComparison.OrdinalIgnoreCase)

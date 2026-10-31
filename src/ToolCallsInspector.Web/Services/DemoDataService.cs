@@ -1,6 +1,9 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json.Nodes;
+using ToolCallsInspector.Core.Clients;
+using ToolCallsInspector.Core.Ingestion;
+using ToolCallsInspector.Core.Storage;
 using ToolCallsInspector.Core.Telemetry;
 using ToolCallsInspector.Ingestion.Otlp;
 
@@ -9,14 +12,29 @@ namespace ToolCallsInspector.Web.Services;
 /// <summary>
 /// Generates a realistic VS Code Copilot Chat OTLP/JSON payload (agent loop, tool calls, a sub-agent,
 /// a hook and a background title request) and feeds it through the real OTLP parser and ingestion pipeline.
+/// It is sent under its own service name, so it shows up as the "Demo data" client and can be removed on its own.
 /// </summary>
-public sealed class DemoDataService(ITelemetryIngestor ingestor)
+public sealed class DemoDataService(ITelemetryIngestor ingestor, ISpanStore store, InspectorEvents events)
 {
+    public const string SourceName = "demo-data";
+
     public async Task<int> LoadAsync(CancellationToken cancellationToken = default)
     {
         var json = BuildPayload(DateTimeOffset.UtcNow.AddMinutes(-12));
         var spans = OtlpJsonTraceParser.Parse(Encoding.UTF8.GetBytes(json));
-        return await ingestor.IngestAsync(spans, "demo-data", cancellationToken);
+        return await ingestor.IngestAsync(spans, SourceName, cancellationToken);
+    }
+
+    /// <summary>Deletes every demo trace (including demo data loaded by older versions, which was labelled as VS Code); returns the number of traces removed.</summary>
+    public async Task<int> RemoveAsync(CancellationToken cancellationToken = default)
+    {
+        var removed = await store.DeleteClientAsync(DemoClientProfile.Id, SourceName, cancellationToken);
+        if (removed > 0)
+        {
+            events.PublishCleared();
+        }
+
+        return removed;
     }
 
     public static string BuildPayload(DateTimeOffset start)
@@ -341,7 +359,7 @@ public sealed class DemoDataService(ITelemetryIngestor ingestor)
                 {
                     ["resource"] = new JsonObject
                     {
-                        ["attributes"] = Attributes([("service.name", "copilot-chat"), ("service.version", "demo"), ("session.id", "demo-window")]),
+                        ["attributes"] = Attributes([("service.name", DemoClientProfile.ServiceName), ("service.version", "demo"), ("session.id", "demo-window")]),
                     },
                     ["scopeSpans"] = new JsonArray(new JsonObject
                     {

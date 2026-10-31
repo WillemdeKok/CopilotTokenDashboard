@@ -23,12 +23,16 @@ public static class ServiceCollectionExtensions
     /// Folder Claude Code writes request bodies to (<c>OTEL_LOG_RAW_API_BODIES=file:&lt;dir&gt;</c>); null uses the default
     /// (<c>~/.claude/api-bodies</c>), empty disables it.
     /// </param>
+    /// <param name="retentionDays">Default retention in days (0 keeps everything); the Setup page can override it.</param>
+    /// <param name="analysisCacheSize">Maximum number of trace analyses kept in memory.</param>
     public static IServiceCollection AddToolCallsInspectorCore(
         this IServiceCollection services,
         string databasePath,
         string? copilotSessionStatePath = null,
         string? claudeProjectsPath = null,
-        string? claudeApiBodiesPath = null)
+        string? claudeApiBodiesPath = null,
+        int retentionDays = 0,
+        int analysisCacheSize = 2000)
     {
         var directory = Path.GetDirectoryName(Path.GetFullPath(databasePath));
         if (!string.IsNullOrEmpty(directory))
@@ -38,7 +42,9 @@ public static class ServiceCollectionExtensions
 
         services.AddDbContextFactory<InspectorDbContext>(o => o.UseSqlite($"Data Source={databasePath}"));
         services.AddSingleton<ISpanStore, EfSpanStore>();
+        services.AddSingleton(sp => new RetentionSettings(sp.GetRequiredService<ISpanStore>(), sp.GetRequiredService<InspectorEvents>(), retentionDays));
 
+        services.AddSingleton<IClientProfile, DemoClientProfile>();
         services.AddSingleton<IClientProfile, VsCodeCopilotChatProfile>();
         services.AddSingleton<IClientProfile, CopilotCliProfile>();
         services.AddSingleton<IClientProfile, ClaudeCodeProfile>();
@@ -57,6 +63,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<ITranscriptSource>(new ClaudeApiBodiesSource(claudeApiBodiesPath ?? ClaudeApiBodiesSource.DefaultRoot()));
         services.AddSingleton<ITranscriptSource>(new ClaudeCodeTranscriptSource(claudeProjectsPath ?? ClaudeCodeTranscriptSource.DefaultRoot()));
         services.AddSingleton<TranscriptEnricher>();
+        services.AddSingleton(new InsightsOptions { AnalysisCacheSize = analysisCacheSize });
         services.AddSingleton<InsightsService>();
         return services;
     }

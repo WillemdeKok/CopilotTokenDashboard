@@ -15,7 +15,10 @@ public sealed class TraceAnalyzer(TokenAttributionEngine attribution)
             values.Where(v => !string.IsNullOrEmpty(v)).GroupBy(v => v!).OrderByDescending(g => g.Count()).Select(g => g.Key).FirstOrDefault();
     }
 
-    public TraceAnalysis Analyze(string traceId, IReadOnlyList<SpanRecord> spans, IReadOnlyDictionary<string, SpanContent> content, string? sessionKey = null)
+    /// <param name="carryIn">The session's main loop at the end of its previous trace; continued by this trace's main loop.</param>
+    /// <param name="saved">A breakdown saved for this trace; used instead of recomputing when it covers every LLM call.</param>
+    public TraceAnalysis Analyze(string traceId, IReadOnlyList<SpanRecord> spans, IReadOnlyDictionary<string, SpanContent> content, string? sessionKey = null,
+        AttributionCarry? carryIn = null, SavedBreakdown? saved = null)
     {
         var nodes = spans
             .DistinctBy(s => s.SpanId)
@@ -61,32 +64,8 @@ public sealed class TraceAnalyzer(TokenAttributionEngine attribution)
         }
 
         var allNodes = roots.Concat(roots.SelectMany(r => r.Descendants())).ToList();
-        foreach (var group in allNodes.Where(n => n.Children.Count > 0))
-        {
-            var chats = group.Children.Where(c => c.Category == SpanCategory.LlmCall).ToList();
-            var tools = group.Children.Where(c => c.Category == SpanCategory.Tool).ToList();
-            if (chats.Count == 0)
-            {
-                continue;
-            }
-
-            attribution.AttributeChain(chats, tools, content);
-            LinkToolsToRequestingCall(chats, tools, content);
-        }
-
-        // Root-level LLM calls (background requests without an agent) form their own chains.
-        var rootChats = roots.Where(r => r.Category == SpanCategory.LlmCall).ToList();
-        foreach (var chat in rootChats)
-        {
-            attribution.AttributeChain([chat], [], content);
-        }
-
         var llmCalls = allNodes.Where(n => n.Category == SpanCategory.LlmCall && !n.IsPlaceholder).OrderBy(n => n.Span.StartTime).ToList();
         var toolCalls = allNodes.Where(n => n.Category == SpanCategory.Tool && !n.IsPlaceholder).OrderBy(n => n.Span.StartTime).ToList();
-
-        var totals = new TokenTotals();
-        llmCalls.ForEach(totals.AddLlmCall);
-        toolCalls.ForEach(totals.AddToolCall);
 
         var topAgent = allNodes
             .Where(n => n.Category == SpanCategory.Agent && !n.IsPlaceholder)
@@ -100,6 +79,67 @@ public sealed class TraceAnalyzer(TokenAttributionEngine attribution)
                          ? GenAiMessageParser.LastUserPrompt(content.GetValueOrDefault(llmCalls[0].Span.Id)?.InputMessages)
                          : null);
         var utility = UtilityPrompts.Match(prompt);
+        var isBackground = utility is not null || (topAgent is null && placeholders.Count == 0);
+
+        var groups = allNodes
+            .Where(n => n.Children.Count > 0)
+            .Select(n => (Node: n, Chats: n.Children.Where(c => c.Category == SpanCategory.LlmCall).ToList(), Tools: n.Children.Where(c => c.Category == SpanCategory.Tool).ToList()))
+            .Where(g => g.Chats.Count > 0)
+            .ToList();
+        var rootChats = roots.Where(r => r.Category == SpanCategory.LlmCall).ToList();
+
+        // Background requests (title generation etc.) are unrelated to the conversation: they neither continue nor change it.
+        var carryOut = carryIn;
+        var fromSaved = saved is not null && saved.ApplyTo(allNodes);
+        if (fromSaved)
+        {
+            carryOut = isBackground ? carryIn : saved!.RestoreCarry() ?? carryIn;
+        }
+        else
+        {
+            // The main agent loop (not beneath a tool call) continues from the previous trace; sub-agents start fresh.
+            var carry = isBackground ? null : carryIn;
+            foreach (var group in groups.OrderBy(g => g.Chats.Min(c => c.Span.StartTime)))
+            {
+                var main = !isBackground && group.Node.Category != SpanCategory.Tool && !group.Node.IsInSubAgent;
+                var result = attribution.AttributeChain(group.Chats, group.Tools, content, main ? carry : null);
+                if (main)
+                {
+                    carry = result;
+                }
+            }
+
+            // Root-level LLM calls (background requests without an agent) form their own chains.
+            foreach (var chat in rootChats)
+            {
+                attribution.AttributeChain([chat], [], content);
+            }
+
+            carryOut = isBackground ? carryIn : carry;
+        }
+
+        foreach (var group in groups)
+        {
+            LinkToolsToRequestingCall(group.Chats, group.Tools, content);
+        }
+
+        foreach (var tool in toolCalls)
+        {
+            var subCalls = tool.Descendants().Where(n => n.Category == SpanCategory.LlmCall && !n.IsPlaceholder).ToList();
+            if (subCalls.Count > 0)
+            {
+                tool.SubAgent = new SubAgentUsage(
+                    subCalls.Count,
+                    subCalls.Sum(c => c.Span.InputTokens ?? 0),
+                    subCalls.Sum(c => c.Span.OutputTokens ?? 0),
+                    subCalls.Sum(c => c.Span.CacheReadTokens ?? 0));
+            }
+        }
+
+        var totals = new TokenTotals();
+        llmCalls.ForEach(totals.AddLlmCall);
+        toolCalls.ForEach(totals.AddToolCall);
+
         var real = spans.ToList();
         return new TraceAnalysis
         {
@@ -115,8 +155,10 @@ public sealed class TraceAnalyzer(TokenAttributionEngine attribution)
             Prompt = utility is null ? prompt : utility.Subject,
             AgentName = topAgent?.Span.AgentName ?? llmCalls.FirstOrDefault()?.Span.AgentName,
             BackgroundTask = utility?.Label,
-            IsBackground = utility is not null || (topAgent is null && placeholders.Count == 0),
+            IsBackground = isBackground,
             InProgress = placeholders.Count > 0,
+            CarryOut = carryOut,
+            FromSavedBreakdown = fromSaved,
         };
     }
 

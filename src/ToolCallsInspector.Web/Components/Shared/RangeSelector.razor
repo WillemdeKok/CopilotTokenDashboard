@@ -1,0 +1,23 @@
+<div class="segmented">
+    @foreach (var (label, range) in Ranges)
+    {
+        <button class="@(range == Value ? "active" : "")" @onclick="() => ValueChanged.InvokeAsync(range)">@label</button>
+    }
+</div>
+
+@code {
+    public static readonly (string Label, TimeSpan? Range)[] Ranges =
+    [
+        ("24h", TimeSpan.FromHours(24)),
+        ("7 days", TimeSpan.FromDays(7)),
+        ("30 days", TimeSpan.FromDays(30)),
+        ("All", null),
+    ];
+
+    public static readonly TimeSpan? Default = TimeSpan.FromDays(7);
+
+    [Parameter] public TimeSpan? Value { get; set; }
+    [Parameter] public EventCallback<TimeSpan?> ValueChanged { get; set; }
+
+    public static DateTimeOffset? Since(TimeSpan? range) => range is { } r ? DateTimeOffset.UtcNow - r : null;
+}

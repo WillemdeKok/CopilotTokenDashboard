@@ -9,6 +9,7 @@
         <h1>Tools</h1>
         <div class="subtitle">How much context each tool's results add — and how often that context gets re-sent.</div>
     </div>
+    <RangeSelector Value="_range" ValueChanged="SetRangeAsync" />
 </div>
 
 @if (Loading)
@@ -17,16 +18,22 @@
 }
 else if (_totals is null || _totals.ByTool.Count == 0)
 {
-    <div class="panel empty"><h2>No tool calls yet</h2></div>
+    <div class="panel empty"><h2>No tool calls @(_range is null ? "yet" : "in this period")</h2></div>
 }
 else
 {
     var t = _totals;
     var maxConsumed = Math.Max(1, t.ByTool.Values.Max(x => x.ConsumedInputTokens));
+    var anySubAgents = t.ByTool.Values.Any(x => x.SubAgentLlmCalls > 0);
     <div class="callout">
         <strong>Introduced</strong> = tokens a tool's results added to the context the first time they were sent.
-        <strong>Consumed</strong> = input tokens spent on those results across <em>every</em> later LLM call (results stay in the conversation and are re-sent).
-        A small result introduced early in a long agent loop can cost many times its size.
+        <strong>Consumed</strong> = input tokens spent on those results across <em>every</em> later LLM call (results stay in the conversation and are re-sent),
+        split into an estimated <strong>fresh</strong> part and the part read from the prompt <strong>cache</strong> (usually much cheaper).
+        The re-send factor and share use the fresh part; a small result introduced early in a long agent loop can still cost many times its size.
+        @if (anySubAgents)
+        {
+            <text> <strong>Sub-agent tokens</strong> = everything the sub-agents started by a tool spent (already included in the overall totals, not in Consumed).</text>
+        }
     </div>
     <div class="panel">
         <table class="data">
@@ -39,14 +46,22 @@ else
                     <th class="num">Introduced</th>
                     <th class="num">Avg / call</th>
                     <th class="num">Consumed</th>
-                    <th class="num">Re-send factor</th>
-                    <th class="num">% of all input</th>
+                    <th class="num" title="Estimated part of Consumed not served from the prompt cache">Fresh</th>
+                    <th class="num" title="Estimated part of Consumed read from the prompt cache">Cached</th>
+                    <th class="num" title="Fresh consumed ÷ introduced">Re-send factor</th>
+                    <th class="num" title="Fresh consumed ÷ all fresh input">% of fresh input</th>
+                    @if (anySubAgents)
+                    {
+                        <th class="num" title="Input + output of the LLM calls made by sub-agents this tool started">Sub-agent tokens</th>
+                    }
                     <th style="width:180px"></th>
                 </tr>
             </thead>
             <tbody>
-                @foreach (var tool in t.ByTool.Values.OrderByDescending(x => x.ConsumedInputTokens).ThenByDescending(x => x.Calls))
+                @foreach (var tool in t.ByTool.Values.OrderByDescending(x => x.ConsumedInputTokens).ThenByDescending(x => x.SubAgentTotal).ThenByDescending(x => x.Calls))
                 {
+                    var freshShare = tool.ConsumedInputTokens > 0 ? tool.FreshConsumedInputTokens / tool.ConsumedInputTokens : 0;
+                    var barWidth = tool.ConsumedInputTokens / maxConsumed * 100;
                     <tr>
                         <td class="mono">@tool.ToolName</td>
                         <td class="num">@tool.Calls</td>
@@ -55,10 +70,21 @@ else
                         <td class="num">@Fmt.Tokens(tool.IntroducedTokens)</td>
                         <td class="num">@Fmt.Tokens(tool.Calls > 0 ? tool.IntroducedTokens / tool.Calls : 0)</td>
                         <td class="num"><strong>@Fmt.Tokens(tool.ConsumedInputTokens)</strong></td>
-                        <td class="num">@(tool.IntroducedTokens > 0 ? $"{tool.ConsumedInputTokens / tool.IntroducedTokens:0.0}×" : "–")</td>
-                        <td class="num">@Fmt.Pct(t.Input > 0 ? tool.ConsumedInputTokens / t.Input * 100 : 0)</td>
+                        <td class="num">@Fmt.Tokens(tool.FreshConsumedInputTokens)</td>
+                        <td class="num muted">@Fmt.Tokens(tool.CachedConsumedInputTokens)</td>
+                        <td class="num">@(tool.IntroducedTokens > 0 ? $"{tool.FreshConsumedInputTokens / tool.IntroducedTokens:0.0}×" : "–")</td>
+                        <td class="num">@Fmt.Pct(t.FreshInput > 0 ? tool.FreshConsumedInputTokens / t.FreshInput * 100 : 0)</td>
+                        @if (anySubAgents)
+                        {
+                            <td class="num" title="@(tool.SubAgentLlmCalls > 0 ? $"{tool.SubAgentLlmCalls} LLM calls · {Fmt.Exact(tool.SubAgentInput)} input · {Fmt.Exact(tool.SubAgentOutput)} output" : null)">
+                                @(tool.SubAgentLlmCalls > 0 ? $"{Fmt.Tokens(tool.SubAgentTotal)} ({tool.SubAgentLlmCalls} calls)" : "–")
+                            </td>
+                        }
                         <td>
-                            <div class="stacked-bar small"><div style="width:@((tool.ConsumedInputTokens / maxConsumed * 100).ToString("0.##", System.Globalization.CultureInfo.InvariantCulture))%;background:@Palette.For(nameof(TokenCategory.ToolResults))"></div></div>
+                            <div class="stacked-bar small" title="Fresh (solid) and cached (faded) consumed tokens">
+                                <div style="width:@Css(barWidth * freshShare)%;background:@Palette.For(nameof(TokenCategory.ToolResults))"></div>
+                                <div style="width:@Css(barWidth * (1 - freshShare))%;background:@Palette.For(nameof(TokenCategory.ToolResults));opacity:.35"></div>
+                            </div>
                         </td>
                     </tr>
                 }
@@ -68,7 +94,18 @@ else
 }
 
 @code {
+    private TimeSpan? _range = RangeSelector.Default;
     private TokenTotals? _totals;
 
-    protected override async Task LoadAsync() => _totals = (await Insights.GetGlobalAsync()).Totals;
+    protected override async Task LoadAsync() => _totals = (await Insights.GetGlobalAsync(RangeSelector.Since(_range))).Totals;
+
+    protected override bool IsRelevant(SpansIngestedEvent e) => e.InRange(RangeSelector.Since(_range));
+
+    private async Task SetRangeAsync(TimeSpan? range)
+    {
+        _range = range;
+        await ReloadAsync();
+    }
+
+    private static string Css(double value) => value.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
 }

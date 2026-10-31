@@ -23,9 +23,27 @@ public sealed class ToolTotals
 
     /// <summary>Input tokens consumed by this tool's results across every LLM call they were re-sent in.</summary>
     public double ConsumedInputTokens { get; set; }
+
+    /// <summary>Estimated part of <see cref="ConsumedInputTokens"/> that was served from the prompt cache.</summary>
+    public double CachedConsumedInputTokens { get; set; }
+
+    public double FreshConsumedInputTokens => Math.Max(0, ConsumedInputTokens - CachedConsumedInputTokens);
+
+    /// <summary>LLM calls made by sub-agents this tool started (e.g. <c>runSubagent</c>). Already part of the global totals.</summary>
+    public long SubAgentLlmCalls { get; set; }
+
+    public long SubAgentInput { get; set; }
+
+    public long SubAgentOutput { get; set; }
+
+    public long SubAgentTotal => SubAgentInput + SubAgentOutput;
 }
 
-public sealed record BreakdownSlice(string Key, string Label, string Description, double Value, double Percent);
+/// <summary>A share of the processed tokens; <paramref name="Cached"/> is the estimated prompt-cache part of an input slice.</summary>
+public sealed record BreakdownSlice(string Key, string Label, string Description, double Value, double Percent, double? Cached = null)
+{
+    public double Fresh => Math.Max(0, Value - (Cached ?? 0));
+}
 
 /// <summary>Aggregated token figures for an LLM call set (trace, session, or global).</summary>
 public sealed class TokenTotals
@@ -43,6 +61,9 @@ public sealed class TokenTotals
     public double ToolDurationMs { get; private set; }
 
     public Dictionary<TokenCategory, double> InputByCategory { get; } = new();
+
+    /// <summary>Estimated prompt-cache part of <see cref="InputByCategory"/>.</summary>
+    public Dictionary<TokenCategory, double> CachedInputByCategory { get; } = new();
     public Dictionary<string, ModelTotals> ByModel { get; } = new(StringComparer.Ordinal);
     public Dictionary<string, ToolTotals> ByTool { get; } = new(StringComparer.Ordinal);
 
@@ -80,6 +101,16 @@ public sealed class TokenTotals
             {
                 Tool(tool).ConsumedInputTokens += value;
             }
+
+            foreach (var (category, value) in comp.CachedByCategory)
+            {
+                CachedInputByCategory[category] = CachedInputByCategory.GetValueOrDefault(category) + value;
+            }
+
+            foreach (var (tool, value) in comp.CachedToolResultsByTool)
+            {
+                Tool(tool).CachedConsumedInputTokens += value;
+            }
         }
     }
 
@@ -95,6 +126,14 @@ public sealed class TokenTotals
         if (s.StatusCode == 2 || s.ErrorType is not null)
         {
             tool.Failures++;
+        }
+
+        // Nested sub-agents are already included in the outermost tool's figures.
+        if (node.SubAgent is { } sub && !node.HasSubAgentToolAncestor)
+        {
+            tool.SubAgentLlmCalls += sub.LlmCalls;
+            tool.SubAgentInput += sub.Input;
+            tool.SubAgentOutput += sub.Output;
         }
     }
 
@@ -113,6 +152,11 @@ public sealed class TokenTotals
         foreach (var (k, v) in other.InputByCategory)
         {
             InputByCategory[k] = InputByCategory.GetValueOrDefault(k) + v;
+        }
+
+        foreach (var (k, v) in other.CachedInputByCategory)
+        {
+            CachedInputByCategory[k] = CachedInputByCategory.GetValueOrDefault(k) + v;
         }
 
         foreach (var (k, v) in other.ByModel)
@@ -134,6 +178,10 @@ public sealed class TokenTotals
             t.DurationMs += v.DurationMs;
             t.IntroducedTokens += v.IntroducedTokens;
             t.ConsumedInputTokens += v.ConsumedInputTokens;
+            t.CachedConsumedInputTokens += v.CachedConsumedInputTokens;
+            t.SubAgentLlmCalls += v.SubAgentLlmCalls;
+            t.SubAgentInput += v.SubAgentInput;
+            t.SubAgentOutput += v.SubAgentOutput;
         }
     }
 
@@ -151,15 +199,19 @@ public sealed class TokenTotals
 
         var attributed = InputByCategory.Values.Sum();
         var unattributed = Math.Max(0, Input - attributed);
+        // Cache reads of calls without a breakdown belong to the unattributed remainder.
+        var unattributedCached = Math.Min(unattributed, Math.Max(0, CacheRead - CachedInputByCategory.Values.Sum()));
         foreach (var category in Enum.GetValues<TokenCategory>())
         {
             var value = InputByCategory.GetValueOrDefault(category);
+            var cached = CachedInputByCategory.GetValueOrDefault(category);
             if (category == TokenCategory.Overhead)
             {
                 value += unattributed;
+                cached += unattributedCached;
             }
 
-            slices.Add(new BreakdownSlice(category.ToString(), TokenCategoryInfo.Label(category), TokenCategoryInfo.Description(category), value, Pct(value, total)));
+            slices.Add(new BreakdownSlice(category.ToString(), TokenCategoryInfo.Label(category), TokenCategoryInfo.Description(category), value, Pct(value, total), cached));
         }
 
         return slices;

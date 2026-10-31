@@ -1,6 +1,17 @@
+@{
+    var showCache = Slices.Any(s => s.Cached > 0);
+}
 <table class="data">
     <thead>
-        <tr><th>Category</th><th class="num">Tokens</th><th class="num">Share</th></tr>
+        <tr>
+            <th>Category</th><th class="num">Tokens</th>
+            @if (showCache)
+            {
+                <th class="num" title="Estimated part of the input not served from the prompt cache">Fresh</th>
+                <th class="num" title="Estimated part of the input read from the prompt cache (the earliest prompt content: system prompt, tool schemas, older history)">Cached</th>
+            }
+            <th class="num">Share</th>
+        </tr>
     </thead>
     <tbody>
         @foreach (var slice in Slices)
@@ -13,15 +24,26 @@
                     }
                 </td>
                 <td class="num">@Fmt.Exact(slice.Value)</td>
+                @if (showCache)
+                {
+                    <td class="num">@(slice.Cached is null ? "–" : Fmt.Exact(slice.Fresh))</td>
+                    <td class="num muted">@(slice.Cached is null ? "–" : Fmt.Exact(slice.Cached.Value))</td>
+                }
                 <td class="num">@Fmt.Pct(slice.Percent)</td>
             </tr>
             @if (slice.Key == nameof(TokenCategory.ToolResults) && ToolDetails is { Count: > 0 })
             {
                 @foreach (var (tool, value) in ToolDetails.OrderByDescending(t => t.Value).Take(MaxToolRows))
                 {
+                    var cached = CachedToolDetails?.GetValueOrDefault(tool) ?? 0;
                     <tr>
                         <td style="padding-left:2rem" class="muted">↳ <span class="mono">@tool</span></td>
                         <td class="num muted">@Fmt.Exact(value)</td>
+                        @if (showCache)
+                        {
+                            <td class="num muted">@(CachedToolDetails is null ? "–" : Fmt.Exact(Math.Max(0, value - cached)))</td>
+                            <td class="num muted">@(CachedToolDetails is null ? "–" : Fmt.Exact(cached))</td>
+                        }
                         <td class="num muted">@Fmt.Pct(Total > 0 ? value / Total * 100 : 0)</td>
                     </tr>
                 }
@@ -29,13 +51,29 @@
         }
     </tbody>
     <tfoot>
-        <tr><th>Total</th><th class="num">@Fmt.Exact(Total)</th><th class="num">100%</th></tr>
+        <tr>
+            <th>Total</th><th class="num">@Fmt.Exact(Total)</th>
+            @if (showCache)
+            {
+                <th class="num">@Fmt.Exact(Total - Slices.Sum(s => s.Cached ?? 0))</th>
+                <th class="num">@Fmt.Exact(Slices.Sum(s => s.Cached ?? 0))</th>
+            }
+            <th class="num">100%</th>
+        </tr>
     </tfoot>
 </table>
+@if (showCache)
+{
+    <div class="muted" style="font-size:.75rem;margin-top:.35rem">
+        Fresh / cached is an estimate: the reported cache reads are assigned to the earliest prompt content first (system prompt, tool schemas, then older history). Totals are exact.
+    </div>
+}
 
 @code {
     [Parameter, EditorRequired] public IReadOnlyList<BreakdownSlice> Slices { get; set; } = [];
     [Parameter] public IReadOnlyDictionary<string, double>? ToolDetails { get; set; }
+    /// <summary>Estimated cache-read part of each <see cref="ToolDetails"/> value.</summary>
+    [Parameter] public IReadOnlyDictionary<string, double>? CachedToolDetails { get; set; }
     [Parameter] public bool ShowDescriptions { get; set; }
     [Parameter] public int MaxToolRows { get; set; } = 8;
 

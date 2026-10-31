@@ -1,6 +1,7 @@
 @page "/sessions"
 @inherits LiveComponentBase
 @inject InsightsService Insights
+@inject IClientCatalog Clients
 
 <PageTitle>Sessions · Tool Calls Inspector</PageTitle>
 
@@ -9,7 +10,16 @@
         <h1>Sessions</h1>
         <div class="subtitle">Each chat session with its interactions, LLM calls and tool calls.</div>
     </div>
-    <input class="btn" style="min-width:260px;cursor:text" placeholder="Filter by prompt or client…" @bind="_filter" @bind:event="oninput" />
+    <div style="display:flex;gap:.6rem;align-items:center;flex-wrap:wrap">
+        <span class="muted" style="font-size:.8rem">Sort by</span>
+        <div class="segmented">
+            @foreach (var (label, sort) in Sorts)
+            {
+                <button class="@(sort == _sort ? "active" : "")" @onclick="() => SetSort(sort)">@label</button>
+            }
+        </div>
+        <input class="btn" style="min-width:260px;cursor:text" placeholder="Filter by prompt or client…" @bind="_filter" @bind:event="oninput" @bind:after="ResetLimit" />
+    </div>
 </div>
 
 @if (Loading)
@@ -25,20 +35,59 @@ else if (_sessions.Count == 0)
 }
 else
 {
+    var rows = Sorted(Filtered).ToList();
     <div class="panel">
-        <SessionTable Sessions="Filtered" />
+        <SessionTable Sessions="rows.Take(_limit).ToList()" />
+        @if (rows.Count > _limit)
+        {
+            <div style="text-align:center;margin-top:.75rem">
+                <button class="btn" @onclick="() => _limit += PageSize">Show more (@(rows.Count - _limit) remaining)</button>
+            </div>
+        }
+        else
+        {
+            <div class="muted" style="font-size:.78rem;margin-top:.5rem">@rows.Count session@(rows.Count == 1 ? "" : "s")</div>
+        }
     </div>
 }
 
 @code {
+    private enum SortOrder { LastActivity, Tokens, LlmCalls }
+
+    private static readonly (string Label, SortOrder Sort)[] Sorts =
+    [
+        ("Last activity", SortOrder.LastActivity),
+        ("Tokens", SortOrder.Tokens),
+        ("LLM calls", SortOrder.LlmCalls),
+    ];
+
+    private const int PageSize = 100;
     private IReadOnlyList<SessionAnalysis> _sessions = [];
     private string _filter = string.Empty;
+    private SortOrder _sort = SortOrder.LastActivity;
+    private int _limit = PageSize;
 
-    private IReadOnlyList<SessionAnalysis> Filtered => string.IsNullOrWhiteSpace(_filter)
+    private IEnumerable<SessionAnalysis> Filtered => string.IsNullOrWhiteSpace(_filter)
         ? _sessions
         : _sessions.Where(s => s.Title.Contains(_filter, StringComparison.OrdinalIgnoreCase)
                                || s.ClientId.Contains(_filter, StringComparison.OrdinalIgnoreCase)
-                               || s.Traces.Any(t => t.Prompt?.Contains(_filter, StringComparison.OrdinalIgnoreCase) == true)).ToList();
+                               || Clients.GetDisplayName(s.ClientId).Contains(_filter, StringComparison.OrdinalIgnoreCase)
+                               || s.Traces.Any(t => t.Prompt?.Contains(_filter, StringComparison.OrdinalIgnoreCase) == true));
+
+    private IEnumerable<SessionAnalysis> Sorted(IEnumerable<SessionAnalysis> sessions) => _sort switch
+    {
+        SortOrder.Tokens => sessions.OrderByDescending(s => s.Totals.Total).ThenByDescending(s => s.End),
+        SortOrder.LlmCalls => sessions.OrderByDescending(s => s.Totals.LlmCalls).ThenByDescending(s => s.End),
+        _ => sessions.OrderByDescending(s => s.End),
+    };
 
     protected override async Task LoadAsync() => _sessions = await Insights.GetSessionsAsync();
+
+    private void SetSort(SortOrder sort)
+    {
+        _sort = sort;
+        ResetLimit();
+    }
+
+    private void ResetLimit() => _limit = PageSize;
 }

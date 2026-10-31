@@ -5,6 +5,7 @@
 @inject InspectorOptions Options
 @inject DemoDataService Demo
 @inject ISpanStore Store
+@inject RetentionSettings Retention
 @using ToolCallsInspector.Core.Transcripts
 @inject IEnumerable<ITranscriptSource> Transcripts
 
@@ -83,13 +84,29 @@
                 <tr><td class="muted">Stored</td><td>@_stats.Traces.ToString("N0") traces · @_stats.Spans.ToString("N0") spans</td></tr>
             </tbody>
         </table>
-        <p>Load a realistic sample (agent loop with tools, a sub-agent and a background request) to explore the UI.</p>
+        <p>Load a realistic sample (agent loop with tools, a sub-agent and a background request) to explore the UI. It is listed under the <span class="badge">Demo data</span> client.</p>
         <div style="display:flex;gap:.75rem;flex-wrap:wrap;align-items:flex-start">
             <button class="btn primary" @onclick="LoadDemoAsync" disabled="@_busy">Load demo data</button>
+            <button class="btn" @onclick="RemoveDemoAsync" disabled="@_busy">Remove demo data</button>
             <ClearDataButton />
         </div>
         <p class="muted" style="font-size:.8rem;margin-top:.75rem">
-            Clearing deletes all captured sessions from the local SQLite database and compacts the file. It is also available at the bottom of the sidebar.
+            Removing demo data deletes only the demo sessions. Clearing deletes all captured sessions from the local SQLite database and compacts the file. It is also available at the bottom of the sidebar.
+        </p>
+        <h3 style="margin-top:1.25rem">Retention</h3>
+        <div style="display:flex;gap:.75rem;flex-wrap:wrap;align-items:center">
+            <label for="retention-days">Keep traces for</label>
+            <select id="retention-days" @bind="_retentionDays" disabled="@_busy">
+                @foreach (var option in RetentionOptions)
+                {
+                    <option value="@option">@(option == 0 ? "ever (no retention)" : $"{option} days")</option>
+                }
+            </select>
+            <button class="btn" @onclick="SaveRetentionAsync" disabled="@(_busy || _retentionDays == _savedRetentionDays)">Save</button>
+        </div>
+        <p class="muted" style="font-size:.8rem;margin-top:.5rem">
+            Traces that ended longer ago are deleted hourly (and when you save). The default comes from <span class="mono">Inspector:RetentionDays</span>
+            (@(Retention.ConfiguredDays == 0 ? "off" : $"{Retention.ConfiguredDays} days")).
         </p>
         @if (_message is not null)
         {
@@ -144,11 +161,22 @@
     private long _dbBytes;
     private bool _busy;
     private string? _message;
+    private int _retentionDays;
+    private int _savedRetentionDays;
+
+    private int[] RetentionOptions => new[] { 0, 7, 14, 30, 90, 180, 365, _savedRetentionDays }.Distinct().Order().ToArray();
 
     protected override async Task LoadAsync()
     {
         _sources = Status.Sources;
         _stats = await Store.GetStatsAsync();
+        var retention = await Retention.GetDaysAsync();
+        if (_retentionDays == _savedRetentionDays)
+        {
+            _retentionDays = retention;
+        }
+
+        _savedRetentionDays = retention;
         _dbBytes = new[] { "", "-wal", "-shm" }
             .Select(suffix => new FileInfo(Options.DatabasePath + suffix))
             .Where(f => f.Exists)
@@ -170,6 +198,43 @@
         catch (Exception ex)
         {
             _message = $"Failed to load demo data: {ex.Message}";
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task RemoveDemoAsync()
+    {
+        _busy = true;
+        try
+        {
+            var removed = await Demo.RemoveAsync();
+            _message = removed == 0 ? "There is no demo data to remove." : $"Removed {removed} demo trace(s).";
+        }
+        catch (Exception ex)
+        {
+            _message = $"Failed to remove demo data: {ex.Message}";
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task SaveRetentionAsync()
+    {
+        _busy = true;
+        try
+        {
+            await Retention.SetDaysAsync(_retentionDays);
+            _savedRetentionDays = _retentionDays;
+            _message = _retentionDays == 0 ? "Retention is off: all traces are kept." : $"Traces older than {_retentionDays} days will be deleted.";
+        }
+        catch (Exception ex)
+        {
+            _message = $"Failed to save retention: {ex.Message}";
         }
         finally
         {

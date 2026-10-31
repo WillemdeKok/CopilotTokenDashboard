@@ -60,11 +60,20 @@
         {
             <BreakdownBar Slices="CallSlices.For(Node)" Small="true" />
         }
-        else if (Node.Category == SpanCategory.Tool && Node.IntroducedTokens is { } introduced)
+        else if (Node.Category == SpanCategory.Tool && (Node.IntroducedTokens is not null || Node.SubAgent is not null))
         {
-            <span class="muted" style="font-size:.78rem" title="Tokens this tool result added to the model's context">
-                +@Fmt.Tokens(introduced) tokens to context@(Node.IntroducedIsEstimate ? " (est.)" : "")
-            </span>
+            @if (Node.IntroducedTokens is { } introduced)
+            {
+                <span class="muted" style="font-size:.78rem" title="Tokens this tool result added to the model's context">
+                    +@Fmt.Tokens(introduced) tokens to context@(Node.IntroducedIsEstimate ? " (est.)" : "")
+                </span>
+            }
+            @if (Node.SubAgent is { } sub)
+            {
+                <span class="badge accent" style="margin-left:.35rem" title="Tokens spent by the sub-agent this tool started: @Fmt.Exact(sub.Input) input (@Fmt.Exact(sub.CacheRead) cached) · @Fmt.Exact(sub.Output) output">
+                    sub-agent: @Fmt.Tokens(sub.Total) tokens · @sub.LlmCalls LLM call@(sub.LlmCalls == 1 ? "" : "s")
+                </span>
+            }
         }
     </span>
     <span class="stats">

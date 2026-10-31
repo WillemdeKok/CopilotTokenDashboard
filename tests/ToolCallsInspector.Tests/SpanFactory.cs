@@ -21,6 +21,9 @@ internal sealed class SpanFactory
 
     public IReadOnlyList<RawSpan> Spans => _spans;
 
+    // copilot_chat.* attributes identify VS Code; other clients (e.g. the CLI) use github.copilot.session.id.
+    private string SessionAttribute => Service == "copilot-chat" ? GenAiKeys.ChatSessionId : GenAiKeys.CopilotSessionId;
+
     public string Agent(double start, double end, string? parent = null, string name = "GitHub Copilot Chat", string? session = null, string? parentSession = null, string? prompt = null)
     {
         var attrs = new Dictionary<string, object?>
@@ -28,7 +31,7 @@ internal sealed class SpanFactory
             [GenAiKeys.OperationName] = "invoke_agent",
             [GenAiKeys.AgentName] = name,
             [GenAiKeys.ConversationId] = session ?? Session,
-            [GenAiKeys.ChatSessionId] = session ?? Session,
+            [SessionAttribute] = session ?? Session,
         };
         if (parentSession is not null) attrs[GenAiKeys.ParentChatSessionId] = parentSession;
         if (prompt is not null) attrs[GenAiKeys.InputMessages] = Messages(Msg("user", Text(prompt)));
@@ -37,7 +40,7 @@ internal sealed class SpanFactory
 
     public string Chat(double start, double end, long input, long output, string? parent, string? inputMessages = null,
         string? system = null, string? userRequest = null, long reasoning = 0, string? session = null, string? parentSession = null,
-        string? outputMessages = null, string? toolDefinitions = null, string? conversationId = null, string? responseId = null)
+        string? outputMessages = null, string? toolDefinitions = null, string? conversationId = null, string? responseId = null, long cacheRead = 0)
     {
         var attrs = new Dictionary<string, object?>
         {
@@ -48,7 +51,8 @@ internal sealed class SpanFactory
             [GenAiKeys.InputTokens] = input,
             [GenAiKeys.OutputTokens] = output,
             [GenAiKeys.ReasoningTokens] = reasoning,
-            [GenAiKeys.ChatSessionId] = session ?? Session,
+            [GenAiKeys.CacheReadTokens] = cacheRead > 0 ? cacheRead : null,
+            [SessionAttribute] = session ?? Session,
             [GenAiKeys.InputMessages] = inputMessages,
             [GenAiKeys.OutputMessages] = outputMessages,
             [GenAiKeys.SystemInstructions] = system,
@@ -68,7 +72,7 @@ internal sealed class SpanFactory
             [GenAiKeys.ToolCallId] = callId,
             [GenAiKeys.ToolCallArguments] = "{}",
             [GenAiKeys.ToolCallResult] = result,
-            [GenAiKeys.ChatSessionId] = session ?? Session,
+            [SessionAttribute] = session ?? Session,
         };
         if (exitCode is not null) attrs[GenAiKeys.ProcessExitCode] = exitCode;
         return Add($"execute_tool {name}", parent, start, end, attrs);
@@ -100,18 +104,34 @@ internal sealed class SpanFactory
     public static (SpanRecord Record, SpanContent Content) Normalize(RawSpan span) =>
         new SpanNormalizer(Catalog).Normalize(span, "test");
 
-    private static ClientCatalog Catalog => new([new VsCodeCopilotChatProfile(), new CopilotCliProfile(), new ClaudeCodeProfile()]);
+    public static ClientCatalog Catalog => new([new DemoClientProfile(), new VsCodeCopilotChatProfile(), new CopilotCliProfile(), new ClaudeCodeProfile()]);
 
+    public static TraceAnalyzer CreateAnalyzer() => new(new TokenAttributionEngine(new TiktokenTokenCounter(), Catalog));
+
+    /// <summary>Analyses each trace; like InsightsService, a session's traces are analysed in order and carry the main loop forward.</summary>
     public static IReadOnlyList<TraceAnalysis> Analyze(IEnumerable<RawSpan> spans, TranscriptEnricher? enricher = null)
     {
         var normalizer = new SpanNormalizer(Catalog);
         var normalized = spans.Select(s => normalizer.Normalize(s, "test")).ToList();
         IReadOnlyDictionary<string, SpanContent> content = normalized.ToDictionary(n => n.Record.Id, n => n.Content);
         content = enricher?.Enrich(content) ?? content;
-        var analyzer = new TraceAnalyzer(new TokenAttributionEngine(new TiktokenTokenCounter()));
-        return normalized.Select(n => n.Record).GroupBy(r => r.TraceId)
-            .Select(g => analyzer.Analyze(g.Key, g.ToList(), content, TraceAnalyzer.ResolveSessionKey(g.Key, g)))
+        var analyzer = CreateAnalyzer();
+        var traces = normalized.Select(n => n.Record).GroupBy(r => r.TraceId)
+            .Select(g => (Id: g.Key, Spans: g.ToList(), Session: TraceAnalyzer.ResolveSessionKey(g.Key, g), Start: g.Min(s => s.StartTime)))
             .ToList();
+        var results = new Dictionary<string, TraceAnalysis>();
+        foreach (var session in traces.GroupBy(t => t.Session))
+        {
+            AttributionCarry? carry = null;
+            foreach (var trace in session.OrderBy(t => t.Start))
+            {
+                var analysis = analyzer.Analyze(trace.Id, trace.Spans, content, trace.Session, carry);
+                carry = analysis.CarryOut;
+                results[trace.Id] = analysis;
+            }
+        }
+
+        return traces.Select(t => results[t.Id]).ToList();
     }
 
     public static string Messages(params JsonObject[] messages) => new JsonArray(messages.Select(m => (JsonNode)m).ToArray()).ToJsonString();

@@ -19,15 +19,20 @@ public static class CallSlices
 
         var comp = call.Composition;
         var attributed = comp?.Total ?? 0;
+        var cacheRead = (double)(s.CacheReadTokens ?? 0);
+        var unattributed = Math.Max(0, input - attributed);
         foreach (var category in Enum.GetValues<TokenCategory>())
         {
             var value = comp?.Get(category) ?? 0;
+            var cached = comp?.GetCached(category) ?? 0;
             if (category == TokenCategory.Overhead)
             {
-                value += Math.Max(0, input - attributed);
+                value += unattributed;
+                cached += Math.Min(unattributed, Math.Max(0, cacheRead - (comp?.CachedTotal ?? 0)));
             }
 
-            slices.Add(new(category.ToString(), TokenCategoryInfo.Label(category), TokenCategoryInfo.Description(category), value, Pct(value, total)));
+            slices.Add(new(category.ToString(), TokenCategoryInfo.Label(category), TokenCategoryInfo.Description(category), value, Pct(value, total),
+                cacheRead > 0 ? cached : null));
         }
 
         return slices;

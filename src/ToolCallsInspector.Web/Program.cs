@@ -23,11 +23,14 @@ builder.Services.AddToolCallsInspectorCore(
     databasePath,
     builder.Configuration["Inspector:CopilotSessionStatePath"],
     builder.Configuration["Inspector:ClaudeProjectsPath"],
-    builder.Configuration["Inspector:ClaudeApiBodiesPath"]);
+    builder.Configuration["Inspector:ClaudeApiBodiesPath"],
+    retentionDays: builder.Configuration.GetValue("Inspector:RetentionDays", 0),
+    analysisCacheSize: builder.Configuration.GetValue("Inspector:AnalysisCacheSize", 2000));
 builder.Services.AddSingleton(new InspectorOptions(databasePath));
 builder.Services.AddSingleton<DemoDataService>();
 builder.Services.AddSingleton<ViewPreferences>();
 builder.Services.AddHostedService<TelemetrySourceHost>();
+builder.Services.AddHostedService<RetentionService>();
 
 builder.Services.AddRazorComponents()
     .AddInteractiveServerComponents();

@@ -13,6 +13,13 @@
         }
     </div>
 }
+else if (SavedSource is not null)
+{
+    <div class="callout" style="margin-bottom:.5rem;font-size:.8rem">
+        📜 The token breakdown was computed from the full prompt in the local @SavedSource and saved. That file is no longer available,
+        so only the @MessageCount message@(MessageCount == 1 ? "" : "s") in the exported telemetry are shown below.
+    </div>
+}
 else if (MessageCount > 0)
 {
     <div class="muted" style="font-size:.75rem;margin-bottom:.4rem">
@@ -24,6 +31,9 @@ else if (MessageCount > 0)
     [Parameter, EditorRequired] public SpanContent? Content { get; set; }
     [Parameter, EditorRequired] public int MessageCount { get; set; }
     [Parameter] public TokenComposition? Composition { get; set; }
+
+    /// <summary>Where the saved breakdown's full prompt came from (<see cref="SpanNode.PromptSource"/>), shown when the file itself is gone.</summary>
+    [Parameter] public string? SavedSource { get; set; }
 
     private int TelemetryCount => GenAiMessageParser.TryParse(Content?.TelemetryInputMessages)?.Count ?? 0;
 }

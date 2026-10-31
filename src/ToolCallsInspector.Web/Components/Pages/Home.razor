@@ -10,12 +10,7 @@
         <h1>Token dashboard</h1>
         <div class="subtitle">Where your Copilot tokens go — updated live as telemetry arrives.</div>
     </div>
-    <div class="segmented">
-        @foreach (var (label, range) in Ranges)
-        {
-            <button class="@(range == _range ? "active" : "")" @onclick="() => SetRangeAsync(range)">@label</button>
-        }
-    </div>
+    <RangeSelector Value="_range" ValueChanged="SetRangeAsync" />
 </div>
 
 @if (Loading)
@@ -47,27 +42,29 @@ else
         <div class="panel">
             <h2>Where did the tokens go?</h2>
             <div class="muted" style="margin-bottom:.75rem;font-size:.85rem">
-                Share of all tokens processed. Tool results and history are re-sent on every LLM call, so they usually dominate input.
+                Share of all tokens processed. Tool results and history are re-sent on every LLM call, so they usually dominate input
+                — but most re-sent input is usually read from the prompt cache (see Fresh / Cached).
             </div>
             <Donut Slices="_slices" CenterLabel="total tokens">
-                <BreakdownTable Slices="_slices" ToolDetails="ToolConsumed(t)" />
+                <BreakdownTable Slices="_slices" ToolDetails="ToolConsumed(t)" CachedToolDetails="ToolCached(t)" />
             </Donut>
         </div>
         <div class="panel">
             <h2>LLM output vs. tool results</h2>
             @{
                 var toolInput = t.InputByCategory.GetValueOrDefault(TokenCategory.ToolResults);
+                var toolCached = t.CachedInputByCategory.GetValueOrDefault(TokenCategory.ToolResults);
             }
             <div class="grid kpis" style="grid-template-columns:repeat(3,1fr)">
                 <Kpi Label="LLM output" Value="@Fmt.Pct(Pct(t.Output, t.Total))" Sub="@Fmt.Tokens(t.Output)" />
-                <Kpi Label="Tool results (input)" Value="@Fmt.Pct(Pct(toolInput, t.Total))" Sub="@Fmt.Tokens(toolInput)" />
-                <Kpi Label="Other input" Value="@Fmt.Pct(Pct(t.Input - toolInput, t.Total))" Sub="@Fmt.Tokens(t.Input - toolInput)" />
+                <Kpi Label="Tool results (input)" Value="@Fmt.Pct(Pct(toolInput, t.Total))" Sub="@($"{Fmt.Tokens(toolInput)} · {Fmt.Tokens(Math.Max(0, toolInput - toolCached))} fresh")" />
+                <Kpi Label="Other input" Value="@Fmt.Pct(Pct(t.Input - toolInput, t.Total))" Sub="@($"{Fmt.Tokens(t.Input - toolInput)} · {Fmt.Tokens(Math.Max(0, t.FreshInput - (toolInput - toolCached)))} fresh")" />
             </div>
             <BreakdownBar Slices="_slices" ShowLegend="true" />
 
             <h3 style="margin-top:1.25rem">Top tools by tokens consumed</h3>
             <table class="data">
-                <thead><tr><th>Tool</th><th class="num">Calls</th><th class="num">Introduced</th><th class="num">Consumed</th><th class="num">% of input</th></tr></thead>
+                <thead><tr><th>Tool</th><th class="num">Calls</th><th class="num">Introduced</th><th class="num">Consumed</th><th class="num" title="Estimated part of Consumed not served from the prompt cache">Fresh</th><th class="num">% of input</th></tr></thead>
                 <tbody>
                     @foreach (var tool in t.ByTool.Values.OrderByDescending(x => x.ConsumedInputTokens).Take(8))
                     {
@@ -76,6 +73,7 @@ else
                             <td class="num">@tool.Calls</td>
                             <td class="num">@Fmt.Tokens(tool.IntroducedTokens)</td>
                             <td class="num">@Fmt.Tokens(tool.ConsumedInputTokens)</td>
+                            <td class="num">@Fmt.Tokens(tool.FreshConsumedInputTokens)</td>
                             <td class="num">@Fmt.Pct(Pct(tool.ConsumedInputTokens, t.Input))</td>
                         </tr>
                     }
@@ -133,21 +131,13 @@ else
 }
 
 @code {
-    private static readonly (string Label, TimeSpan? Range)[] Ranges =
-    [
-        ("24h", TimeSpan.FromHours(24)),
-        ("7 days", TimeSpan.FromDays(7)),
-        ("30 days", TimeSpan.FromDays(30)),
-        ("All", null),
-    ];
-
-    private TimeSpan? _range = TimeSpan.FromDays(7);
+    private TimeSpan? _range = RangeSelector.Default;
     private GlobalInsights? _data;
     private IReadOnlyList<BreakdownSlice> _slices = [];
 
     protected override async Task LoadAsync()
     {
-        _data = await Insights.GetGlobalAsync(_range is { } r ? DateTimeOffset.UtcNow - r : null);
+        _data = await Insights.GetGlobalAsync(RangeSelector.Since(_range));
         _slices = _data.Totals.Slices();
     }
 
@@ -156,6 +146,11 @@ else
         _range = range;
         await ReloadAsync();
     }
+
+    protected override bool IsRelevant(SpansIngestedEvent e) => e.InRange(RangeSelector.Since(_range));
+
+    private static Dictionary<string, double> ToolCached(TokenTotals t) =>
+        t.ByTool.Values.Where(x => x.ConsumedInputTokens > 0).ToDictionary(x => x.ToolName, x => x.CachedConsumedInputTokens);
 
     private static Dictionary<string, double> ToolConsumed(TokenTotals t) =>
         t.ByTool.Values.Where(x => x.ConsumedInputTokens > 0).ToDictionary(x => x.ToolName, x => x.ConsumedInputTokens);

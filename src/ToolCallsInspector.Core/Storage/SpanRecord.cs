@@ -72,6 +72,41 @@ public sealed class SpanRecord
     public SpanRecord CloneMetadata() => (SpanRecord)MemberwiseClone();
 }
 
+/// <summary>A trace's saved token attribution (<see cref="Analysis.SavedBreakdown"/>), valid while its fingerprints still match.</summary>
+public sealed class TraceBreakdownRow
+{
+    public required string TraceId { get; set; }
+    public string? SessionKey { get; set; }
+
+    /// <summary>The trace's own spans when it was computed (count and latest receive time).</summary>
+    public required string Fingerprint { get; set; }
+
+    /// <summary>The chain fingerprint of the session's previous trace when it was computed ("" when there was none).</summary>
+    public required string PredecessorChain { get; set; }
+
+    public required string Json { get; set; }
+
+    /// <summary>The main loop's last prompt + response (gzip JSON), continued by the session's next trace.</summary>
+    public byte[]? CarryTranscript { get; set; }
+
+    /// <summary>True when a local transcript / request-body log supplied a full prompt.</summary>
+    public bool UsedTranscript { get; set; }
+
+    public long ComputedAt { get; set; }
+}
+
+public sealed class SettingRow
+{
+    public required string Key { get; set; }
+    public string? Value { get; set; }
+}
+
+/// <summary>Per-trace summary used to order a session's traces and detect changes without loading spans.</summary>
+public sealed record TraceIndexEntry(string TraceId, string SessionKey, int SpanCount, long MaxReceivedTicks, DateTimeOffset Start, DateTimeOffset End)
+{
+    public string Fingerprint => $"{SpanCount}:{MaxReceivedTicks}";
+}
+
 public sealed class SpanContent
 {
     public required string Id { get; set; }

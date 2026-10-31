@@ -12,6 +12,9 @@ public sealed class VsCodeCopilotChatProfile : IClientProfile
     public string DisplayName => "VS Code Copilot Chat";
     public int Priority => 10;
 
+    // VS Code sends the whole conversation with every request.
+    public InputCapture InputCapture => InputCapture.Full;
+
     public bool Matches(RawSpan span)
     {
         var service = span.ResourceAttributes.GetString("service.name");
@@ -38,6 +41,9 @@ public sealed class CopilotCliProfile : IClientProfile
     public string DisplayName => "Copilot CLI / app";
     public int Priority => 20;
 
+    // The CLI only exports the messages added since the previous request.
+    public InputCapture InputCapture => InputCapture.Incremental;
+
     public bool Matches(RawSpan span)
     {
         var service = span.ResourceAttributes.GetString("service.name") ?? string.Empty;
@@ -50,6 +56,27 @@ public sealed class CopilotCliProfile : IClientProfile
     {
         record.ClientInstanceId ??= span.ResourceAttributes.GetString("session.id", "service.instance.id");
     }
+}
+
+/// <summary>
+/// The built-in demo data (<c>service.name = "tool-calls-inspector-demo"</c>). It is shaped like VS Code telemetry but kept
+/// under its own client so it can be told apart and removed without touching real sessions.
+/// </summary>
+public sealed class DemoClientProfile : IClientProfile
+{
+    public const string Id = "demo";
+    public const string ServiceName = "tool-calls-inspector-demo";
+
+    public string ClientId => Id;
+    public string DisplayName => "Demo data";
+    public int Priority => 5;
+    public InputCapture InputCapture => InputCapture.Full;
+
+    public bool Matches(RawSpan span) =>
+        string.Equals(span.ResourceAttributes.GetString("service.name"), ServiceName, StringComparison.OrdinalIgnoreCase);
+
+    public void Enrich(RawSpan span, SpanRecord record, SpanContent content) =>
+        record.ClientInstanceId ??= span.ResourceAttributes.GetString("session.id");
 }
 
 /// <summary>Fallback for any other GenAI semantic-convention compliant emitter.</summary>

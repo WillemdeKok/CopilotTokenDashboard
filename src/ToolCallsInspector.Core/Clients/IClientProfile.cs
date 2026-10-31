@@ -3,6 +3,19 @@ using ToolCallsInspector.Core.Telemetry;
 
 namespace ToolCallsInspector.Core.Clients;
 
+/// <summary>How a client fills <c>gen_ai.input.messages</c> on each LLM call.</summary>
+public enum InputCapture
+{
+    /// <summary>Not known: a prompt that doesn't start where the previous one did is treated as incremental.</summary>
+    Unknown,
+
+    /// <summary>Every call carries the whole prompt (history included); it is never appended to the previous prompt.</summary>
+    Full,
+
+    /// <summary>Each call only carries the messages added since the previous call (Copilot CLI).</summary>
+    Incremental,
+}
+
 /// <summary>
 /// Describes a Copilot client (VS Code, Copilot CLI, ...). Profiles identify which client emitted a span
 /// and can enrich the normalized record with client-specific attributes. Add a new client by registering
@@ -18,6 +31,9 @@ public interface IClientProfile
     int Priority { get; }
 
     bool Matches(RawSpan span);
+
+    /// <summary>Whether captured input messages hold the full prompt or only what was added since the previous call.</summary>
+    InputCapture InputCapture => InputCapture.Unknown;
 
     /// <summary>Category for clients that don't follow the GenAI operation names; null uses the standard mapping.</summary>
     SpanCategory? Categorize(RawSpan span) => null;
@@ -38,6 +54,8 @@ public interface IClientCatalog
     IClientProfile Resolve(RawSpan span);
 
     string GetDisplayName(string clientId);
+
+    IClientProfile? Find(string clientId) => Profiles.FirstOrDefault(p => p.ClientId == clientId);
 }
 
 public sealed class ClientCatalog(IEnumerable<IClientProfile> profiles) : IClientCatalog

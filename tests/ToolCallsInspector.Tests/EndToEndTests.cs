@@ -20,6 +20,7 @@ public class DemoPayloadTests
         var traces = SpanFactory.Analyze(spans);
 
         Assert.Single(traces.Select(t => t.SessionKey).Distinct());
+        Assert.All(traces, t => Assert.Equal(Core.Clients.DemoClientProfile.Id, t.ClientId));
         Assert.Contains(traces, t => t.IsBackground);
         Assert.Equal(2, traces.Count(t => !t.IsBackground));
         Assert.All(traces.Where(t => !t.IsBackground), t => Assert.False(string.IsNullOrEmpty(t.Prompt)));
@@ -41,6 +42,8 @@ public class DemoPayloadTests
         // The sub-agent is nested under its runSubagent tool call.
         var sub = traces.SelectMany(t => t.All()).Single(n => n.Category == SpanCategory.Agent && n.Parent is not null);
         Assert.Equal("runSubagent", sub.Parent!.Span.ToolName);
+        Assert.NotNull(sub.Parent.SubAgent);
+        Assert.True(sub.Parent.SubAgent!.LlmCalls > 0);
     }
 }
 
@@ -93,13 +96,16 @@ public sealed class OtlpEndpointTests : IClassFixture<OtlpEndpointTests.Factory>
         Assert.True(session.Totals.LlmCalls >= 8);
         Assert.True(session.Totals.ToolCalls >= 5);
 
-        var trace = session.Traces[0];
+        Assert.Equal(Core.Clients.DemoClientProfile.Id, session.ClientId);
+        var trace = session.Traces.First(t => !t.IsBackground);
         var llmCall = trace.LlmCalls[0];
+        var subAgentTool = session.Traces.SelectMany(t => t.ToolCalls).Single(t => t.SubAgent is not null);
         foreach (var url in new[]
                  {
                      "/", "/sessions", "/tools", "/setup", "/traces", "/traces?view=calls",
                      "/" + Fmt.SessionUrl(session.SessionKey), "/" + Fmt.SpanUrl(llmCall.Span.Id),
                      "/" + Fmt.TraceUrl(trace.TraceId), "/" + Fmt.TraceUrl(trace.TraceId, llmCall.Span.Id),
+                     "/" + Fmt.SpanUrl(subAgentTool.Span.Id),
                  })
         {
             var page = await client.GetAsync(url);
@@ -110,6 +116,12 @@ public sealed class OtlpEndpointTests : IClassFixture<OtlpEndpointTests.Factory>
         Assert.Contains("wf-bar llm", traceHtml);
         Assert.Contains("Response", traceHtml);
         Assert.Contains(trace.TraceId, await client.GetStringAsync("/traces"));
+
+        Assert.Contains("Sub-agent tokens", await client.GetStringAsync("/" + Fmt.SpanUrl(subAgentTool.Span.Id)));
+        var sessionHtml = System.Net.WebUtility.HtmlDecode(await client.GetStringAsync("/" + Fmt.SessionUrl(session.SessionKey)));
+        Assert.Contains("T1·#1", sessionHtml);
+        Assert.Contains("sub-agent call", sessionHtml);
+        Assert.Contains("demo", await client.GetStringAsync("/sessions"));
     }
 
     [Fact]
