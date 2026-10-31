@@ -17,6 +17,7 @@ internal sealed class SpanFactory
 
     public string TraceId { get; } = Convert.ToHexStringLower(Guid.NewGuid().ToByteArray());
     public string Session { get; init; } = "session-1";
+    public string Service { get; init; } = "copilot-chat";
 
     public IReadOnlyList<RawSpan> Spans => _spans;
 
@@ -73,9 +74,10 @@ internal sealed class SpanFactory
         return Add($"execute_tool {name}", parent, start, end, attrs);
     }
 
-    public string Custom(string name, string? parent, double start, double end, Dictionary<string, object?> attrs) => Add(name, parent, start, end, attrs);
+    public string Custom(string name, string? parent, double start, double end, Dictionary<string, object?> attrs, params RawSpanEvent[] events) =>
+        Add(name, parent, start, end, attrs, events);
 
-    private string Add(string name, string? parent, double start, double end, Dictionary<string, object?> attrs)
+    private string Add(string name, string? parent, double start, double end, Dictionary<string, object?> attrs, RawSpanEvent[]? events = null)
     {
         var spanId = (++_counter).ToString("x16");
         _spans.Add(new RawSpan
@@ -87,16 +89,22 @@ internal sealed class SpanFactory
             StartTime = Origin.AddSeconds(start),
             EndTime = Origin.AddSeconds(end),
             Attributes = attrs.Where(kv => kv.Value is not null).ToDictionary(),
-            ResourceAttributes = new Dictionary<string, object?> { ["service.name"] = "copilot-chat" },
+            ResourceAttributes = new Dictionary<string, object?> { ["service.name"] = Service },
+            Events = events ?? [],
         });
         return spanId;
     }
 
     public TraceAnalysis Analyze(TranscriptEnricher? enricher = null) => Analyze(_spans, enricher).Single();
 
+    public static (SpanRecord Record, SpanContent Content) Normalize(RawSpan span) =>
+        new SpanNormalizer(Catalog).Normalize(span, "test");
+
+    private static ClientCatalog Catalog => new([new VsCodeCopilotChatProfile(), new CopilotCliProfile(), new ClaudeCodeProfile()]);
+
     public static IReadOnlyList<TraceAnalysis> Analyze(IEnumerable<RawSpan> spans, TranscriptEnricher? enricher = null)
     {
-        var normalizer = new SpanNormalizer(new ClientCatalog([new VsCodeCopilotChatProfile(), new CopilotCliProfile()]));
+        var normalizer = new SpanNormalizer(Catalog);
         var normalized = spans.Select(s => normalizer.Normalize(s, "test")).ToList();
         IReadOnlyDictionary<string, SpanContent> content = normalized.ToDictionary(n => n.Record.Id, n => n.Content);
         content = enricher?.Enrich(content) ?? content;

@@ -1,12 +1,11 @@
 @using ToolCallsInspector.Core.Transcripts
-@inject CopilotSessionTranscriptSource Transcripts
 @inject TranscriptEnricher Enricher
 @inject InsightsService Insights
 @inject IJSRuntime JS
 
-@if (Span.Category is SpanCategory.LlmCall or SpanCategory.Tool && Transcripts.HasTranscript(Span.ConversationId))
+@if (Span.Category is SpanCategory.LlmCall or SpanCategory.Tool && _source is not null)
 {
-    <button class="btn" title="Raw events.jsonl lines the Copilot session log wrote about this call" @onclick="OpenAsync">{ } Raw log</button>
+    <button class="btn" title="@($"Raw lines the {_source.Name} wrote about this call")" @onclick="OpenAsync">{ } Raw log</button>
 
     @if (_open)
     {
@@ -25,7 +24,7 @@
                 }
                 else if (_events is not { Events.Count: > 0 })
                 {
-                    <div class="muted">No lines in the session log reference this call.</div>
+                    <div class="muted">No lines in the @_source.Name reference this call.</div>
                 }
                 else
                 {
@@ -53,14 +52,28 @@
     private bool _open;
     private bool _loading;
     private int? _copied;
+    private ITranscriptSource? _source;
+    private bool _resolved;
+    private string? _sourceConversation;
     private TranscriptEvents? _events;
     private string?[] _pretty = [];
 
     private string Label => Span.Category == SpanCategory.Tool ? Span.ToolCallId ?? Span.Name : Span.Model;
 
     private string Description => Span.Category == SpanCategory.Tool
-        ? "What the CLI logged when it started and finished this tool call (arguments and result)."
-        : "What the CLI logged for this call: the model's reply and token usage. The request itself is not logged; see 📤 Full request.";
+        ? "What the client logged about this tool call (arguments and result)."
+        : "What the client logged for this call, such as the model's reply and token usage. The request itself is not logged; see 📤 Full request.";
+
+    protected override void OnParametersSet()
+    {
+        // Locating the log touches the file system: only redo it when the span's conversation changes.
+        if (!_resolved || _sourceConversation != Span.ConversationId)
+        {
+            _resolved = true;
+            _sourceConversation = Span.ConversationId;
+            _source = Span.Category is SpanCategory.LlmCall or SpanCategory.Tool ? Enricher.SourceFor(Span.ConversationId) : null;
+        }
+    }
 
     private async Task OpenAsync()
     {

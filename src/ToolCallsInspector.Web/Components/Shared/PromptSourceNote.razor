@@ -1,8 +1,8 @@
 @if (Content?.TranscriptPath is { } path)
 {
     <div class="callout" style="margin-bottom:.5rem;font-size:.8rem">
-        📜 <strong>Full prompt</strong>: @MessageCount message@(MessageCount == 1 ? "" : "s"), rebuilt from the local Copilot session log
-        <span class="mono" title="@path">@System.IO.Path.GetFileName(System.IO.Path.GetDirectoryName(path))/events.jsonl</span>.
+        📜 <strong>Full prompt</strong>: @MessageCount message@(MessageCount == 1 ? "" : "s"), from the local @(Content.TranscriptSource ?? "session log")
+        <span class="mono" title="@path">@System.IO.Path.GetFileName(System.IO.Path.GetDirectoryName(path))/@System.IO.Path.GetFileName(path)</span>.
         The telemetry itself only carried @TelemetryCount message@(TelemetryCount == 1 ? "" : "s") (those added during this turn).
         @if (Composition?.TokenizerScale is { } scale)
         {
@@ -16,7 +16,7 @@
 else if (MessageCount > 0)
 {
     <div class="muted" style="font-size:.75rem;margin-bottom:.4rem">
-        @MessageCount message@(MessageCount == 1 ? "" : "s") in <span class="mono">gen_ai.input.messages</span>. Some clients (e.g. Copilot CLI) only send the messages added since the previous call.
+        @MessageCount message@(MessageCount == 1 ? "" : "s") in the exported telemetry. Some clients (e.g. Copilot CLI, Claude Code) only send the messages added since the previous call.
     </div>
 }
 

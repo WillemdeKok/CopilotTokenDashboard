@@ -25,12 +25,13 @@ public sealed class SpanNode
     public SpanCategory Category => Span.Category;
 
     /// <summary>
-    /// Diagnostic timing spans the Copilot CLI emits (<c>session.timing.*</c> and containers such as <c>session.first_turn</c>):
-    /// uncategorized <c>session.*</c> spans with nothing but other timing spans beneath them.
+    /// Diagnostic timing spans: the Copilot CLI's <c>session.timing.*</c> (and containers such as <c>session.first_turn</c>),
+    /// i.e. uncategorized <c>session.*</c> spans with nothing but other timing spans beneath them, and Claude Code's
+    /// per-tool permission-wait and execution spans (<c>claude_code.tool.blocked_on_user</c>, <c>claude_code.tool.execution</c>).
     /// </summary>
     public bool IsTiming =>
         Category == SpanCategory.Other
-        && Span.Name.StartsWith("session.", StringComparison.Ordinal)
+        && (Span.Name.StartsWith("session.", StringComparison.Ordinal) || Span.Name.StartsWith("claude_code.tool.", StringComparison.Ordinal))
         && Children.All(c => c.IsTiming);
 
     public IEnumerable<SpanNode> Descendants()

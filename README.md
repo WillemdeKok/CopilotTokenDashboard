@@ -111,6 +111,43 @@ setx OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT "true"
 
 The CLI captures only the messages that are **new** since the previous LLM call. The inspector rebuilds the full prompt by appending each call's input to the previous call's prompt and response.
 
+## Connecting Claude Code
+
+> [!NOTE]
+> Claude Code support is built from Anthropic's [monitoring docs](https://code.claude.com/docs/en/monitoring-usage) and tested with synthetic spans and transcripts only. It has **not** been verified against a live Claude Code install yet.
+
+Claude Code's trace export is a beta. Put the variables in the `env` block of your **user** settings, `~/.claude/settings.json`. Claude Code ignores exporter settings in a repository's `.claude/settings.json`. You can also export them in your shell:
+
+```json
+{
+  "env": {
+    "CLAUDE_CODE_ENABLE_TELEMETRY": "1",
+    "CLAUDE_CODE_ENHANCED_TELEMETRY_BETA": "1",
+    "OTEL_TRACES_EXPORTER": "otlp",
+    "OTEL_EXPORTER_OTLP_PROTOCOL": "http/json",
+    "OTEL_EXPORTER_OTLP_ENDPOINT": "http://localhost:4318",
+    "OTEL_LOG_USER_PROMPTS": "1",
+    "OTEL_LOG_TOOL_DETAILS": "1",
+    "OTEL_LOG_TOOL_CONTENT": "1",
+    "OTEL_LOG_RAW_API_BODIES": "file:C:\\Users\\<you>\\.claude\\api-bodies"
+  }
+}
+```
+
+`OTEL_LOG_RAW_API_BODIES` is optional but recommended. It makes the breakdown exact (see [Exact requests from Claude Code's API body log](#exact-requests-from-claude-codes-api-body-log)). Use the absolute path of your `~/.claude/api-bodies` folder; the Setup page shows yours.
+
+`ClaudeCodeProfile` recognises `claude_code.*` spans or `service.name = claude-code` and maps them as follows:
+
+| Claude Code span | Shown as | Notes |
+|---|---|---|
+| `claude_code.interaction` | Agent (one per prompt) | The prompt is shown only with `OTEL_LOG_USER_PROMPTS=1`; otherwise it is `<REDACTED>` and the inspector falls back to the transcript. |
+| `claude_code.llm_request` | LLM call | Model, tokens, cache, TTFT, stop reason and `query_source`. Claude Code's `input_tokens` **excludes** the prompt cache, so the inspector reports input = `input_tokens + cache_read_tokens + cache_creation_tokens`. That matches the other clients and is what the model actually read. |
+| `claude_code.tool` | Tool call | `tool_name`, `tool_use_id`. Arguments come from the file path, command, skill or subagent (needs `OTEL_LOG_TOOL_DETAILS`). The result comes from the `tool.output` event (needs `OTEL_LOG_TOOL_CONTENT`). |
+| `claude_code.tool.blocked_on_user`, `claude_code.tool.execution` | Timing spans | Permission wait and execution time; hidden with the timing toggle. |
+| `claude_code.hook` | Hook | |
+
+`session.id` correlates the turns of one session. Prompt and response bodies only appear on spans with Claude Code's *detailed beta tracing* (`ENABLE_BETA_TRACING_DETAILED`). That setting redirects traces to its own endpoint and needs allowlisting for interactive sessions. The inspector therefore relies on local files (below) for full prompts.
+
 ## Try it: the warm weather sample
 
 `samples/WeatherApi` is a small ASP.NET Core API where the weather is always nice and warm (roughly 24–34 °C, sunny, little rain). The same date and city always return the same report. It also hosts an **MCP server** at `/mcp`, so Copilot can call it as a tool.
@@ -194,11 +231,30 @@ The Copilot CLI (and the Copilot app, which runs it) writes the complete transcr
 - **{ } Raw log** (on LLM and tool call panels and detail pages) opens the raw log lines for that call, prettified, with their line numbers. LLM calls match on `apiCallId` (`assistant.message` with the model's reply, `session.usage_record` with usage); tool calls match on `toolCallId` (`tool.execution_start` with the arguments, `tool.execution_complete` with the result). The CLI does not log outgoing LLM requests, so use Full request for those.
 - All JSON in the UI (payloads, attributes, overlays) is pretty-printed and syntax highlighted server-side; plain text is shown as-is.
 
-## Extending to Copilot CLI / the Copilot app
+### Full prompts from the Claude Code transcript
+
+Claude Code writes each session to `~/.claude/projects/<project>/<session id>.jsonl`. Every line has a `uuid` and a `parentUuid`, and assistant lines carry the API `requestId`, which equals the span's `request_id`. To rebuild the prompt for a call, the inspector walks back up the parent chain from that call's first response line. It merges streamed lines that belong to one response, maps `tool_use`/`tool_result` blocks to tool calls and results, and stops at a compaction boundary, where the summary starts the new history. Rewound branches and synthetic error messages are left out. **{ } Raw log** matches on `requestId`, `message.id` and tool use ids.
+
+- Location: `CLAUDE_CONFIG_DIR` or `~/.claude`, then `projects`. Override with `Inspector:ClaudeProjectsPath`; set it to an empty string to disable.
+- The transcript has no system prompt, tool schemas or CLAUDE.md. That part of the billed input (often 15–20K tokens) stays *Not captured* unless the API body log below is enabled. The inspector only scales estimates up to the billed input when the system prompt is known, so the history and tool-result figures are not inflated to cover it.
+- Subagent transcripts, which newer versions keep in separate files, are not read yet. Subagent calls show their telemetry only.
+
+### Exact requests from Claude Code's API body log
+
+With `OTEL_LOG_RAW_API_BODIES=file:<dir>`, Claude Code writes the exact Messages API request of every model call to `<dir>/<uuid>.request.json`, and the response to `<dir>/<request id>.response.json`. Since v2.1.274 it also appends a line to `<dir>/index.jsonl` with the `session_id`, the `request_id` and both file names. The inspector reads that index, so it needs v2.1.274 or later.
+
+- A request body holds the system prompt (including CLAUDE.md), the tool schemas and every message, so the request view shows the real prompt and the breakdown has no *Not captured* share. Earlier thinking blocks are redacted by Claude Code. Estimates are scaled to the billed input as for the Copilot session log.
+- The body log takes precedence; calls missing from the index fall back to the transcript. **{ } Raw log** still uses the transcript.
+- Location: `CLAUDE_CONFIG_DIR` or `~/.claude`, then `api-bodies`. Override with `Inspector:ClaudeApiBodiesPath`; set it to an empty string to disable. Body files named in the index are only read when they lie inside that folder.
+- Claude Code's inline mode (`OTEL_LOG_RAW_API_BODIES=1`) sends truncated bodies as OTLP log events, which the inspector does not receive; use file mode.
+- **Privacy:** these files contain your full conversations, including file contents and command output. Claude Code does not clean them up; delete the folder when you're done.
+
+## Extending to other clients
 
 The pipeline is client-agnostic:
 
-- **`IClientProfile`** (`Core/Clients`) detects a client from resource/span attributes and can enrich spans. `CopilotCliProfile` matches `service.name` values containing `copilot-cli` or `github-copilot`. **Confirm the actual `service.name` the CLI emits and adjust the match.**
+- **`IClientProfile`** (`Core/Clients`) detects a client from resource/span attributes. It can categorize spans the GenAI conventions don't cover, and it fills the normalized fields before the generic derivations run. `ClaudeCodeProfile` is a complete example of a client with its own attribute names.
+- **`ITranscriptSource`** (`Core/Transcripts`) rebuilds full prompts from a client's local log. Derive from `LocalTranscriptSource` (locating the file and caching) and `JsonlTranscript` (incremental tailing and the raw-line index), and register it as an `ITranscriptSource` singleton. `TranscriptEnricher` asks each source in turn, so an exact source can precede a reconstructing one; set `ProvidesEvents => false` on a source without raw log lines.
 - **OTLP push**: any client that exports OTLP/HTTP (JSON or protobuf) to `http://localhost:4318` works unchanged. The env vars shown on the Setup page are the standard `OTEL_EXPORTER_OTLP_*` variables plus the `COPILOT_OTEL_*` switches VS Code uses. **Check the CLI's own docs for its exact opt-in variables.**
 - **`ITelemetrySource`** is for pull-based sources, for example reading the Copilot CLI's local `~/.copilot/session-state/*/events.jsonl` and its `session-store.db` usage table. Implement it, map records to `RawSpan` using the GenAI attribute names (`GenAiKeys`), and register it with `services.AddTelemetrySource<MySource>()`. `TelemetrySourceHost` runs it and feeds the same ingestor.
 
@@ -209,7 +265,8 @@ src/
   ToolCallsInspector.AppHost/          Aspire AppHost: starts the inspector + weather sample
   ToolCallsInspector.Core/
     Telemetry/       RawSpan, attribute helpers, ITelemetryIngestor/ITelemetrySource
-    Clients/         IClientProfile + VS Code / CLI / generic profiles
+    Clients/         IClientProfile + VS Code / CLI / Claude Code / generic profiles
+    Transcripts/     ITranscriptSource: Copilot session log, Claude Code transcript and API body log readers
     Normalization/   GenAI attribute keys, SpanNormalizer
     Storage/         SpanRecord/SpanContent, EF Core SQLite store
     Ingestion/       TelemetryIngestor, InspectorEvents, IngestionStatus

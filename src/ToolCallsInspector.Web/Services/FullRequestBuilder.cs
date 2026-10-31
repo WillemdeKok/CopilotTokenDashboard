@@ -35,8 +35,8 @@ public static class FullRequestBuilder
         Add("system", "System prompt", content.SystemInstructions, null);
         Add("tools", toolCount is { } t ? $"Tool schemas · {t}" : "Tool schemas", content.ToolDefinitions, null);
         Add("messages", messageCount is { } m ? $"Messages · {m}" : "Messages", content.InputMessages, fullHistory
-            ? "Full history, rebuilt from the local Copilot session log."
-            : "As captured in telemetry. Some clients (e.g. Copilot CLI) only send the messages added during the current turn.");
+            ? $"Full history, from the local {content.TranscriptSource ?? "session log"}."
+            : "As captured in telemetry. Some clients (e.g. Copilot CLI, Claude Code) only send the messages added during the current turn.");
 
         return new FullRequest(sections, request.ToJsonString(Indented), fullHistory);
 

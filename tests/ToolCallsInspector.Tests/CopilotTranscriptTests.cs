@@ -122,6 +122,7 @@ public sealed class CopilotTranscriptTests : IDisposable
     public void Complete_prompt_scales_estimates_to_the_reported_tokens_instead_of_reporting_a_gap()
     {
         Write(
+            Event("system.message", new JsonObject { ["content"] = "You are a helpful assistant." }),
             UserMessage("what is the weather?"),
             Assistant("call-1", toolCallId: "t1", toolName: "get_weather"),
             ToolResult("t1", Words(3000, "weather")),

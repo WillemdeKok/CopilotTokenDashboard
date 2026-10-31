@@ -25,7 +25,7 @@ public sealed class SpanNormalizer(IClientCatalog clients, TimeProvider? timePro
         var a = span.Attributes;
         var profile = clients.Resolve(span);
         var id = $"{span.TraceId}-{span.SpanId}";
-        var category = Categorize(span);
+        var category = profile.Categorize(span) ?? Categorize(span);
 
         var record = new SpanRecord
         {
@@ -86,6 +86,9 @@ public sealed class SpanNormalizer(IClientCatalog clients, TimeProvider? timePro
             EventsJson = System.Text.Json.JsonSerializer.Serialize(span.Events.Select(e => new { e.Name, e.Time, e.Attributes })),
         };
 
+        // Client-specific mapping first, so the derived fields below see (and never overwrite) its values.
+        profile.Enrich(span, record, content);
+
         if (string.IsNullOrEmpty(record.ToolName) && record.Category == SpanCategory.Tool)
         {
             record.ToolName = StripPrefix(span.Name, "execute_tool ");
@@ -98,7 +101,8 @@ public sealed class SpanNormalizer(IClientCatalog clients, TimeProvider? timePro
 
         if (record.Category == SpanCategory.Agent)
         {
-            var prompt = GenAiMessageParser.FirstUserText(content.InputMessages)
+            var prompt = record.UserPrompt
+                         ?? GenAiMessageParser.FirstUserText(content.InputMessages)
                          ?? span.Events.FirstOrDefault(e => e.Name == "user_message")?.Attributes.GetString("content");
             record.UserPrompt = Truncate(GenAiMessageParser.CleanPrompt(prompt), PromptPreviewLength);
         }
@@ -107,11 +111,10 @@ public sealed class SpanNormalizer(IClientCatalog clients, TimeProvider? timePro
                             || content.ToolArguments is not null || content.ToolResult is not null;
 
         // Child sessions (sub-agents, title generation, ...) roll up into their parent chat session.
-        record.SessionKey = record.ParentChatSessionId
-                            ?? record.ChatSessionId
-                            ?? (record.Category == SpanCategory.Agent ? record.ConversationId : null);
+        record.SessionKey ??= record.ParentChatSessionId
+                              ?? record.ChatSessionId
+                              ?? (record.Category == SpanCategory.Agent ? record.ConversationId : null);
 
-        profile.Enrich(span, record, content);
         return (record, content);
     }
 

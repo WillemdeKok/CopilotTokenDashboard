@@ -28,6 +28,7 @@ public static class GenAiKeys
     public const string ToolDefinitions = "gen_ai.tool.definitions";
     public const string ErrorType = "error.type";
     public const string ProcessExitCode = "process.exit.code";
+    public const string SessionId = "session.id";
 
     public const string CopilotSessionId = "github.copilot.session.id";
     public const string CopilotHookDecision = "github.copilot.hook.decision";

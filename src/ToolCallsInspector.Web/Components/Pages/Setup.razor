@@ -5,13 +5,15 @@
 @inject InspectorOptions Options
 @inject DemoDataService Demo
 @inject ISpanStore Store
+@using ToolCallsInspector.Core.Transcripts
+@inject IEnumerable<ITranscriptSource> Transcripts
 
 <PageTitle>Setup · Tool Calls Inspector</PageTitle>
 
 <div class="page-header">
     <div>
         <h1>Setup &amp; status</h1>
-        <div class="subtitle">Connect Copilot clients to the inspector's OTLP receiver.</div>
+        <div class="subtitle">Connect Copilot clients (or Claude Code) to the inspector's OTLP receiver.</div>
     </div>
 </div>
 
@@ -31,6 +33,18 @@
         <p>The CLI (which also powers the Copilot app) exports OTel when <span class="mono">OTEL_EXPORTER_OTLP_ENDPOINT</span> is set. Set these environment variables before starting it (see <span class="mono">copilot help monitoring</span>):</p>
         <pre class="code">@CliEnv</pre>
         <p class="muted" style="font-size:.85rem">Any other OTLP/HTTP exporter that follows the GenAI conventions works too. Both JSON and protobuf payloads are accepted on <span class="mono">/v1/traces</span>.</p>
+    </div>
+    <div class="panel">
+        <h2>3. Claude Code</h2>
+        <p>Claude Code exports traces (beta) over OTLP. Add this to <span class="mono">~/.claude/settings.json</span> (user settings; Claude Code ignores these variables in a repository's <span class="mono">.claude/settings.json</span>), or set them in your shell, then start <span class="mono">claude</span>:</p>
+        <CodeBlock Text="@ClaudeSettings" Format="false" />
+        <p class="muted" style="font-size:.85rem">
+            Token usage, models, tool names and timings need no extra opt-in. The three <span class="mono">OTEL_LOG_*</span> variables add your prompts, tool arguments and tool results.
+            <span class="mono">OTEL_LOG_RAW_API_BODIES</span> makes Claude Code write the exact request of every model call (system prompt, tool schemas, all messages) to
+            <span class="mono">@(ClaudeBodiesPath ?? "a local folder")</span>, so the token breakdown is measured instead of partly "Not captured". Needs Claude Code v2.1.274+.
+            Those files contain your full conversations; delete the folder when you're done.
+            Without it, full prompts are rebuilt from the local transcript (<span class="mono">~/.claude/projects/&lt;project&gt;/&lt;session&gt;.jsonl</span>), which lacks the system prompt and tool schemas.
+        </p>
     </div>
 </div>
 
@@ -107,6 +121,23 @@
         export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318
         export OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=true
         """;
+
+    private string ClaudeSettings => $$"""
+        {
+          "env": {
+            "CLAUDE_CODE_ENABLE_TELEMETRY": "1",
+            "CLAUDE_CODE_ENHANCED_TELEMETRY_BETA": "1",
+            "OTEL_TRACES_EXPORTER": "otlp",
+            "OTEL_EXPORTER_OTLP_PROTOCOL": "http/json",
+            "OTEL_EXPORTER_OTLP_ENDPOINT": "http://localhost:4318",
+            "OTEL_LOG_USER_PROMPTS": "1",
+            "OTEL_LOG_TOOL_DETAILS": "1",
+            "OTEL_LOG_TOOL_CONTENT": "1"{{(ClaudeBodiesPath is null ? "" : $",\n    \"OTEL_LOG_RAW_API_BODIES\": {System.Text.Json.JsonSerializer.Serialize("file:" + ClaudeBodiesPath)}")}}
+          }
+        }
+        """;
+
+    private string? ClaudeBodiesPath => Transcripts.OfType<ClaudeApiBodiesSource>().FirstOrDefault()?.Root;
 
     private IReadOnlyList<SourceStatus> _sources = [];
     private StoreStats _stats = new(0, 0);

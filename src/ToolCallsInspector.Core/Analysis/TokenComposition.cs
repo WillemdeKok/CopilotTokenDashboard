@@ -38,12 +38,12 @@ public static class TokenCategoryInfo
 
     public static string Description(TokenCategory category) => category switch
     {
-        TokenCategory.SystemPrompt => "Copilot's system instructions sent with every request.",
+        TokenCategory.SystemPrompt => "The client's system instructions sent with every request.",
         TokenCategory.UserContext => "Your messages plus attached context (files, selections, instructions).",
         TokenCategory.AssistantHistory => "Previous assistant replies and tool-call arguments re-sent as history.",
         TokenCategory.ToolResults => "Output returned by tools and re-sent to the model on each later call.",
         TokenCategory.ToolSchemas => "Definitions of every available tool (name, description, parameters) sent with each request.",
-        TokenCategory.Overhead => "Reported input with no captured content behind it: mostly earlier turns of the conversation (the Copilot CLI only exports messages added in the current turn), plus provider formatting.",
+        TokenCategory.Overhead => "Reported input with no captured content behind it: earlier turns the client didn't export (the Copilot CLI only exports messages added in the current turn), or, for Claude Code, its system prompt, tool schemas and CLAUDE.md, which neither its telemetry nor its transcript records. Plus provider formatting.",
         _ => string.Empty,
     };
 }

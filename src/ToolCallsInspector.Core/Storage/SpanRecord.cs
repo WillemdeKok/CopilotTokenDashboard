@@ -90,6 +90,9 @@ public sealed class SpanContent
     /// <summary>Not stored. Set when <see cref="InputMessages"/> holds the full prompt rebuilt from this local session log.</summary>
     public string? TranscriptPath { get; set; }
 
+    /// <summary>Not stored. Name of the log <see cref="TranscriptPath"/> points to, e.g. "Copilot session log".</summary>
+    public string? TranscriptSource { get; set; }
+
     /// <summary>Not stored. The (partial) input messages the telemetry carried, when replaced from a transcript.</summary>
     public string? TelemetryInputMessages { get; set; }
 }

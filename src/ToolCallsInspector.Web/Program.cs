@@ -19,7 +19,11 @@ builder.WebHost.ConfigureKestrel(options =>
     options.Limits.MaxRequestBodySize = 256L * 1024 * 1024;
 });
 
-builder.Services.AddToolCallsInspectorCore(databasePath, builder.Configuration["Inspector:CopilotSessionStatePath"]);
+builder.Services.AddToolCallsInspectorCore(
+    databasePath,
+    builder.Configuration["Inspector:CopilotSessionStatePath"],
+    builder.Configuration["Inspector:ClaudeProjectsPath"],
+    builder.Configuration["Inspector:ClaudeApiBodiesPath"]);
 builder.Services.AddSingleton(new InspectorOptions(databasePath));
 builder.Services.AddSingleton<DemoDataService>();
 builder.Services.AddSingleton<ViewPreferences>();

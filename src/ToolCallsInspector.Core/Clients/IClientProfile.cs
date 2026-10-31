@@ -19,6 +19,13 @@ public interface IClientProfile
 
     bool Matches(RawSpan span);
 
+    /// <summary>Category for clients that don't follow the GenAI operation names; null uses the standard mapping.</summary>
+    SpanCategory? Categorize(RawSpan span) => null;
+
+    /// <summary>
+    /// Maps client-specific attributes after the standard GenAI mapping. Runs before derived fields
+    /// (tool/agent name, user prompt, session key, ...) are filled in, which only fill values still empty.
+    /// </summary>
     void Enrich(RawSpan span, SpanRecord record, SpanContent content)
     {
     }

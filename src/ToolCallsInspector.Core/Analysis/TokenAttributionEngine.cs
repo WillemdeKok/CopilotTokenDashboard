@@ -44,11 +44,15 @@ public sealed class TokenAttributionEngine(ITokenCounter counter)
             var callContent = content.GetValueOrDefault(call.Span.Id);
 
             var inputs = ParseUsable(callContent?.InputMessages);
-            // A prompt rebuilt from a session transcript is already complete; never append it to the previous one.
-            var complete = callContent?.TranscriptPath is not null;
+            // A prompt rebuilt from a session transcript holds the whole history; never append it to the previous one.
+            var fromTranscript = callContent?.TranscriptPath is not null;
+            // It is only the complete request when the system prompt is known too: Claude Code's transcript lacks the
+            // system prompt and tool schemas, and scaling its history up to the billed input would inflate every category.
+            var complete = fromTranscript
+                && (!string.IsNullOrEmpty(callContent!.SystemInstructions) || inputs?.Any(m => m.Role is "system" or "developer") == true);
             List<ChatMessage>? prompt = inputs is null
                 ? null
-                : !complete && transcript is not null && IsIncremental(inputs, transcript) ? [.. transcript, .. inputs] : [.. inputs];
+                : !fromTranscript && transcript is not null && IsIncremental(inputs, transcript) ? [.. transcript, .. inputs] : [.. inputs];
             transcript = prompt is null
                 ? null
                 : [.. prompt, .. GenAiMessageParser.TryParse(callContent?.OutputMessages) ?? []];
